@@ -7291,7 +7291,7 @@ function addAccountForSchool(schoolId){
   +'</div><div class="mf"><button class="btn bg2" onclick="closeM();viewSchoolAccounts(\''+schoolId+'\')">'+T('cancel')+'</button><button class="btn bp" onclick="saveAccountForSchool(\''+schoolId+'\')">💾 Create →</button></div>',true);
 }
 
-function saveAccountForSchool(schoolId){
+async function saveAccountForSchool(schoolId){
   const fn=document.getElementById('nas-fn').value.trim();
   const ln=document.getElementById('nas-ln').value.trim();
   const u=document.getElementById('nas-u').value.trim().toLowerCase().replace(/[^a-z0-9_]/g,'');
@@ -7304,7 +7304,7 @@ function saveAccountForSchool(schoolId){
   if(all.some(a=>a.username.toLowerCase()===u.toLowerCase())){toast('Username already exists','danger');return;}
   all.push({
     id:'u_'+Date.now().toString(36),
-    username:u,password:p,role:r,
+    username:u,password:await hashPassword(p),role:r,
     firstName:fn,lastName:ln,
     email:e,phone:ph,
     active:true,
@@ -7322,7 +7322,8 @@ function saveAccountForSchool(schoolId){
 function editAccountForSchool(accId,schoolId){
   const all=DB._raw_get('accounts')||[];
   const a=all.find(x=>x.id===accId);if(!a)return;
-  const roleOptions=Object.entries(RL).filter(([r])=>r!=='backend_admin').map(([k,v])=>'<option value="'+k+'"'+(a.role===k?' selected':'')+'>'+v.en+'</option>').join('');
+  const isBA=a.role==='backend_admin';
+  const roleOptions=isBA?'<option value="backend_admin" selected>Backend Admin</option>':Object.entries(RL).filter(([r])=>r!=='backend_admin').map(([k,v])=>'<option value="'+k+'"'+(a.role===k?' selected':'')+'>'+v.en+'</option>').join('');
   
   openM('<div class="mh"><h3>✏️ Edit Account</h3><button class="mc" onclick="closeM()">×</button></div><div class="mb2">'
   +'<div class="fr f2"><div class="fg"><label>First Name</label><input id="eas-fn" value="'+esc(a.firstName||'')+'"></div><div class="fg"><label>Last Name</label><input id="eas-ln" value="'+esc(a.lastName||'')+'"></div></div>'
@@ -7333,14 +7334,17 @@ function editAccountForSchool(accId,schoolId){
   +'</div><div class="mf"><button class="btn bg2" onclick="closeM();viewSchoolAccounts(\''+schoolId+'\')">'+T('cancel')+'</button><button class="btn bp" onclick="saveAccountEditForSchool(\''+accId+'\',\''+schoolId+'\')">💾 Save →</button></div>',true);
 }
 
-function saveAccountEditForSchool(accId,schoolId){
+async function saveAccountEditForSchool(accId,schoolId){
   const all=DB._raw_get('accounts')||[];
   const i=all.findIndex(x=>x.id===accId);if(i<0)return;
   all[i].firstName=document.getElementById('eas-fn').value.trim();
   all[i].lastName=document.getElementById('eas-ln').value.trim();
   all[i].username=document.getElementById('eas-u').value.trim();
   const newPw=document.getElementById('eas-p').value.trim();
-  if(newPw)all[i].password=newPw;
+  if(newPw){
+    all[i].password=await hashPassword(newPw);
+    delete all[i]._mustChangePassword;
+  }
   all[i].role=document.getElementById('eas-r').value;
   all[i].email=document.getElementById('eas-e').value.trim();
   all[i].phone=document.getElementById('eas-ph').value.trim();
