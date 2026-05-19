@@ -3678,6 +3678,9 @@ async function bootFirebaseSync(){
     }
   }
   console.log('[FB] Real-time sync active for '+subscribed.size+' collections');
+  if(window.__FB&&window.__FB.connected!==undefined){
+    updateSyncStatus(window.__FB.connected);
+  }
   if(typeof navigate==='function'&&_page){try{navigate(_page);}catch(e){}}
 }
 
