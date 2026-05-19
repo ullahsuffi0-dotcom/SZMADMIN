@@ -497,10 +497,6 @@ async function doLogin(){
   if(window.SZM_MODE==='client'&&user.role==='backend_admin'){toast('Backend Admin cannot log in here. Use the Backend Admin portal.','danger');return;}
   _loginAttempts.count=0;_loginAttempts.lockUntil=0;
   CU=user;SAIMP=false;SAR=null;saveLoginSession(user);
-  if(user._mustChangePassword){
-    showForcePasswordChange();
-    return;
-  }
   launch();
 }
 function showForcePasswordChange(){
