@@ -139,7 +139,7 @@ code{font-family:'JetBrains Mono',monospace;background:var(--sf2);padding:2px 6p
 <script type="module">
 // Firebase SDK v10 modular imports
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-app.js";
-import { getDatabase, ref, set, get, onValue, child, onDisconnect, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-database.js";
+import { getDatabase, ref, set, get, update, onValue, child, onDisconnect, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-database.js";
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js";
 
 const firebaseConfig = {
@@ -155,7 +155,7 @@ const firebaseConfig = {
 const fbApp = initializeApp(firebaseConfig);
 const fbDB = getDatabase(fbApp);
 const fbAuth = getAuth(fbApp);
-window.__FB = { app: fbApp, db: fbDB, auth: fbAuth, ref, set, get, onValue, child, onDisconnect, serverTimestamp, ready: false };
+window.__FB = { app: fbApp, db: fbDB, auth: fbAuth, ref, set, get, update, onValue, child, onDisconnect, serverTimestamp, ready: false };
 window.__FB_AUTH = { signIn: signInWithEmailAndPassword, createUser: createUserWithEmailAndPassword, signOut, onAuthStateChanged };
 
 // Connection status tracking
@@ -3472,26 +3472,27 @@ async function syncDownAll(){
 }
 
 // Push entire local DB up to Firebase (used for first-time seeding)
+// Push entire local DB up to Firebase (merge, not replace)
 async function syncUpAll(){
   if(!window.__FB)return;
-  const{db,ref,set}=window.__FB;
+  const{db,ref,update}=window.__FB;
   try{
     const data={};
-    // Use raw access since DB.get is session-wrapped
     const rawGet=DB._raw_get||DB.get.bind(DB);
-    SYNC_KEYS.forEach(k=>{const v=rawGet(k);if(v!==null&&v!==undefined)data[k]=v;});
-    // Also include all session-scoped buckets currently in localStorage
+    SYNC_KEYS.forEach(k=>{const v=rawGet(k);if(v!==null&&v!==undefined&&!(Array.isArray(v)&&v.length===0))data[k]=v;});
     for(let i=0;i<localStorage.length;i++){
       const lkey=localStorage.key(i);
       if(!lkey||!lkey.startsWith('sms7_'))continue;
       const k=lkey.substring(5);
       if(isSessionScopedKey(k)){
         const v=rawGet(k);
-        if(v!==null&&v!==undefined)data[k]=v;
+        if(v!==null&&v!==undefined&&!(Array.isArray(v)&&v.length===0))data[k]=v;
       }
     }
-    await set(ref(db,'data'),data);
-    console.log('[FB] Bulk upload complete ('+Object.keys(data).length+' keys)');
+    if(Object.keys(data).length){
+      await update(ref(db,'data'),data);
+      console.log('[FB] Bulk upload complete ('+Object.keys(data).length+' keys)');
+    }
   }catch(e){console.error('[FB] Bulk upload failed:',e);}
 }
 
@@ -3661,10 +3662,9 @@ async function bootFirebaseSync(){
   
   SYNC_INITIAL_LOAD=true;
   SYNC_ENABLED=true;
-  if(!hadData){
-    console.log('[FB] Cloud empty — uploading initial dataset.');
-    await syncUpAll();
-  }
+  // Always push local data to Firebase (uses update/merge, won't overwrite richer cloud data)
+  console.log('[FB] Pushing local data to cloud…');
+  await syncUpAll();
   // Subscribe to real-time updates
   SYNC_KEYS.forEach(k=>subscribeToCollection(k));
   const subscribed=new Set(SYNC_KEYS);
