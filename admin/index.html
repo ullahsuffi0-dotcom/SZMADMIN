@@ -6,7 +6,7 @@
 <meta http-equiv="X-Content-Type-Options" content="nosniff">
 <meta http-equiv="X-Frame-Options" content="SAMEORIGIN">
 <meta name="referrer" content="strict-origin-when-cross-origin">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.gstatic.com https://*.firebaseio.com https://*.googleapis.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src https://*.firebaseio.com https://*.firebasedatabase.app https://*.googleapis.com wss://*.firebaseio.com wss://*.firebasedatabase.app; img-src 'self' data: blob:;">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.gstatic.com https://*.firebaseio.com https://*.googleapis.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src https: wss:; img-src 'self' data: blob:;">
 <title id="pg-title">SZM School Admin System</title>
 <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
@@ -3568,10 +3568,10 @@ function capitalize(s){return s?s.charAt(0).toUpperCase()+s.slice(1):'';}
 // Boot sequence: wait for Firebase → sync down → run seed/migrate → enable sync → subscribe
 async function bootFirebaseSync(){
   updateSyncStatus(false);
-  
+
   // CRITICAL: Always run seed FIRST so we have a clean starting state.
   // Seed is idempotent (checks sv7 flag) — won't overwrite if already done.
-  if(!window.__seedDone){window.__doSeedAndStart();window.__seedDone=true;}
+  if(!window.__seedDone){try{window.__doSeedAndStart();}catch(e){console.warn('[FB] Seed error:',e);}window.__seedDone=true;}
   
   const ok=await waitForFirebase(4000);
   if(!ok){
@@ -3579,42 +3579,35 @@ async function bootFirebaseSync(){
     updateSyncStatus(false);
     return;
   }
+  try{
   console.log('[FB] SDK loaded. Pulling initial data from cloud…');
   const hadData=await syncDownAll();
-  
+
   // After sync, re-check accounts: if Firebase brought back old demo accounts
   // but our seed only created backend admin, force a clean state
   const localAccounts=JSON.parse(localStorage.getItem('sms7_accounts')||'[]');
   const hasOnlyBackend=localAccounts.length===1&&localAccounts[0].role==='backend_admin';
   const hasManyAccounts=localAccounts.length>2;
-  
-  // If we had a clean seed (1 account) but sync brought back many, the Firebase data is stale
-  // Push our clean state up to overwrite it
+
   if(!hasOnlyBackend&&hasManyAccounts){
-    // Check if there's a sv7 that was set by US (not by old data)
-    // If schools list is empty, this is definitely a fresh install and Firebase has stale data
     const schools=JSON.parse(localStorage.getItem('sms7_schools')||'[]');
     if(!schools.length||schools.every(s=>s.id==='default_school')){
-      console.log('[FB] Detected stale Firebase data (old accounts, no real schools). Resetting to clean state.');
-      // Clear sv7 and re-seed cleanly
+      console.log('[FB] Detected stale Firebase data. Resetting to clean state.');
       localStorage.removeItem('sms7_sv7');
       localStorage.removeItem('sms7_accounts');
       localStorage.removeItem('sms7_schools');
       localStorage.removeItem('sms7_students');
       localStorage.removeItem('sms7_teachers');
       if(typeof seed==='function')seed();
-      // Push clean data up
       await syncUpAll();
     }
   }
-  
+
   SYNC_INITIAL_LOAD=true;
   SYNC_ENABLED=true;
   window.__SYNC_ON=true;
-  // Always push local data to Firebase (uses update/merge, won't overwrite richer cloud data)
   console.log('[FB] Pushing local data to cloud…');
   await syncUpAll();
-  // Subscribe to real-time updates
   SYNC_KEYS.forEach(k=>subscribeToCollection(k));
   const subscribed=new Set(SYNC_KEYS);
   for(let i=0;i<localStorage.length;i++){
@@ -3627,10 +3620,12 @@ async function bootFirebaseSync(){
     }
   }
   console.log('[FB] Real-time sync active for '+subscribed.size+' collections');
-  // Fix race condition: the .info/connected listener in the module script may have
-  // already fired true before updateSyncStatus was defined. Re-check current state.
+  }catch(e){console.error('[FB] Boot error:',e);}
+  // Always re-check connection status at end of boot regardless of errors
   if(window.__FB&&window.__FB.connected!==undefined){
     updateSyncStatus(window.__FB.connected);
+  }else if(window.__FB){
+    updateSyncStatus(true);
   }
   if(typeof navigate==='function'&&_page){try{navigate(_page);}catch(e){}}
 }
