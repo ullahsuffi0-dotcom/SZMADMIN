@@ -428,6 +428,25 @@ async function doLogin(){
   if(typeof migrate==='function'){try{migrate();}catch(e){}}
   if(typeof ensureAccountsExist==='function'){try{ensureAccountsExist();}catch(e){}}
 
+  // Pull latest accounts from Firebase before checking credentials
+  if(window.__FB&&window.__FB.db){
+    try{
+      const snap=await window.__FB.get(window.__FB.ref(window.__FB.db,'data/accounts'));
+      if(snap.exists()){
+        let fbAcc=snap.val();
+        if(fbAcc&&typeof fbAcc==='object'&&!Array.isArray(fbAcc)){
+          const ks=Object.keys(fbAcc);
+          if(ks.length>0&&ks.every(k=>/^\d+$/.test(k))){const a=[];ks.sort((x,y)=>+x-+y).forEach(k=>a.push(fbAcc[k]));fbAcc=a;}
+        }
+        if(Array.isArray(fbAcc)&&fbAcc.length>0){
+          window.__fbSyncPaused=true;
+          localStorage.setItem('sms7_accounts',JSON.stringify(fbAcc));
+          window.__fbSyncPaused=false;
+        }
+      }
+    }catch(e){console.warn('[FB] Could not fetch accounts:',e);}
+  }
+
   const acc=DB.get('accounts')||[];
   if(!acc.length){
     toast('Account database is empty — reloading...','danger');
