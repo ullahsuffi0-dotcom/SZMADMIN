@@ -331,6 +331,18 @@ const DB={
     delete _dbMem['sms7_'+k];
   }
 };
+// Firebase auto-sync: intercept ALL localStorage writes with sms7_ prefix.
+// This fires regardless of how DB.set is wrapped (session scoping, etc.).
+window.__fbSyncPaused=false;
+const _origLSsetItem=localStorage.setItem.bind(localStorage);
+localStorage.setItem=function(k,v){
+  _origLSsetItem(k,v);
+  if(!k.startsWith('sms7_')||window.__fbSyncPaused||!window.__SYNC_ON||!window.__FB)return;
+  var key=k.substring(5);
+  if(!window.__shouldSync||!window.__shouldSync(key))return;
+  var{db,ref,set}=window.__FB;
+  try{set(ref(db,'data/'+key),JSON.parse(v)).catch(function(e){console.warn('[FB] Write failed:'+key,e.message);});}catch(e){}
+};
 const RL={superadmin:{en:'Super Admin',ar:'مدير النظام'},principal:{en:'Principal',ar:'مدير المدرسة'},vice_principal:{en:'Vice Principal',ar:'وكيل المدرسة'},academic_supervisor:{en:'Academic Supervisor',ar:'المشرف الأكاديمي'},student_advisor:{en:'Student Advisor',ar:'المرشد الطلابي'},activity_incharge:{en:'Activity Incharge',ar:'مسؤول الأنشطة'},quality_supervisor:{en:'Quality Supervisor',ar:'مشرف الجودة'},quality_incharge:{en:'Quality Incharge',ar:'مسؤول الجودة'},admin_assistant:{en:'Admin Assistant',ar:'المساعد الإداري'},teacher:{en:'Teacher',ar:'معلم'}};
 function rL(r){return RL[r]?.[_lang]||RL[r]?.en||r;}
 const TR={en:{dashboard:'Dashboard',activity_log:'Activity Log',students:'Students',accounts:'Staff Accounts',complaints:'Complaints',tasks:'Tasks',infractions:'Infractions',referrals:'Referrals',class_visits:'Class Visits',notebook_checks:'Notebook Checks',activities:'Activities',early_pickup:'Early Pickup',exam_absent:'Exam Absent List',announcements:'Announcements',settings:'Settings',infraction_forms:'Infraction Forms',visit_forms:'Visit Forms',behaviour:'Behaviour & Counseling',discipline_reports:'Discipline Reports',task_requests:'Task Requests',my_profile:'My Profile',export_data:'Export Data',academic_calendar:'Academic Calendar',parent_qr:'Parent QR Portal',activity_reports:'Activity Reports',teachers:'Teachers',teacher_reports:'View Reports by Teacher',daily_attendance:'Daily Attendance',student_health:'Student Health',remedial_plans:'Remedial Plans',vp_reports:'Reports to Principal',warning_letters:'Warning Letters',teacher_achievements:'Teacher Achievements',reexam_schedule:'Re-exam Schedule',pickup_qr:'Pickup QR Poster',sessions:'Academic Sessions',my_class_visits:'My Class Visits',my_warnings:'My Warning Letters',my_remedials:'My Remedial Plans',my_achievements:'My Achievements',duty_roster:'Duty Roster',substitutions:'Substitutions',my_duties:'My Duties &amp; Substitutions',sign_in:'Sign In',sign_out:'Sign Out',save:'Save',cancel:'Cancel',edit:'Edit',delete:'Delete',view:'View',add:'Add',search:'Search',close:'Close',first_name:'First Name',last_name:'Last Name',nationality:'Nationality',father_phone:'Father Phone',mother_phone:'Mother Phone',serial_no:'Serial No.',class_sn:'Class SN',username:'Username',password:'Password',name:'Name',email:'Email',phone:'Phone',role:'Role',status:'Status',date:'Date',grade:'Grade',section:'Section',subject:'Subject',description:'Description',assigned_to:'Assigned To',assigned_by:'Assigned By',due_date:'Due Date',priority:'Priority',pending:'Pending',in_progress:'In Progress',completed:'Completed',open:'Open',resolved:'Resolved',closed:'Closed',active:'Active',inactive:'Inactive',select_student:'Search student by name or grade…',no_records:'No records found',acknowledge:'Acknowledge',export_excel:'Export Excel',export_pdf:'Export PDF',date_from:'From Date',date_to:'To Date',language:'Language',color_theme:'Color Theme',change_password:'Change Password',current_password:'Current Password',new_password:'New Password',confirm_password:'Confirm Password',save_profile:'Save Profile',remarks:'Remarks',action_taken:'Action Taken',infraction_type:'Infraction Type',degree:'Degree',teacher:'Teacher',period:'Period',observations:'Observations',strengths:'Strengths',improvements:'Areas for Improvement',follow_up:'Follow-up',rating:'Rating',academic_ack:'Academic Supervisor Ack',principal_ack:'Principal Ack',complaint_type:'Complaint Type',track_number:'Track No.',parent_name:'Parent Name',add_remark:'Add Remark',remark_history:'Remark History',reason:'Reason',note:'Note',live_feed:'Live Activity Feed',total_students:'Total Students',open_complaints:'Open Complaints',active_tasks:'Active Tasks',overview:'Overview',management:'Management',system:'System',academic:'Academic',my_work:'My Work',discipline:'Discipline',monitoring:'Monitoring',exam_subject:'Exam Subject',absent_date:'Absent Date',school_name:'School Name',academic_year:'Academic Year',upload_logo:'Upload Logo',logo_emoji:'Logo Emoji',live_mode:'Live Mode',event_name:'Event Name',event_date:'Event Date',days_left:'days left',upcoming_events:'Upcoming Events',add_event:'Add Event',guardian:'Guardian'},
@@ -3444,22 +3456,9 @@ async function syncDownAll(){
               const arr=[];keys.sort((a,b)=>+a-+b).forEach(kk=>arr.push(v[kk]));v=arr;
             }
           }
-          // Same safeguard as live sync: don't let cloud overwrite a richer local list during initial pull
-          const APPEND_ONLY=['accounts','sessions','schools','early_pickups','complaints','tasks','infractions','referrals',
-            'class_visits','notebook_checks','activities','activity_reports','exam_absents',
-            'reexam_schedules','daily_attendance','student_health','remedial_plans','vp_reports',
-            'warning_letters','teacher_achievements','behaviour','discipline','substitutions','activity_log'];
-          const baseKey=isSessionScopedKey(k)?k.replace(/_[^_]+$/,''):k;
-          if(APPEND_ONLY.includes(baseKey)&&Array.isArray(v)){
-            try{
-              const existing=JSON.parse(localStorage.getItem('sms7_'+k)||'[]');
-              if(Array.isArray(existing)&&existing.length>v.length){
-                console.warn('[FB] Initial sync: kept richer local '+k+' ('+existing.length+' records vs cloud '+v.length+'). Will push local up.');
-                return; // skip overwriting
-              }
-            }catch(e){}
-          }
+          window.__fbSyncPaused=true;
           localStorage.setItem('sms7_'+k,JSON.stringify(v));
+          window.__fbSyncPaused=false;
         }
       });
       console.log('[FB] Initial sync complete — '+Object.keys(all).length+' collections loaded from cloud');
@@ -3471,7 +3470,6 @@ async function syncDownAll(){
   }catch(e){console.error('[FB] Initial sync failed:',e);return false;}
 }
 
-// Push entire local DB up to Firebase (used for first-time seeding)
 // Push entire local DB up to Firebase (merge, not replace)
 async function syncUpAll(){
   if(!window.__FB)return;
@@ -3509,38 +3507,9 @@ function logFBError(k,e){
   }
 }
 
-// Override DB._raw_set (the underlying storage layer) so we capture the ACTUAL key
-// being written (e.g. "students_default") not the logical key ("students").
-// This way session-scoped writes get pushed to Firebase under their real key.
-if(!DB._raw_set){
-  // _raw_set hasn't been set up yet — use DB.set directly (no session wrapping)
-  const _origDBset=DB.set.bind(DB);
-  DB.set=function(k,v){
-    _origDBset(k,v);
-    if(SYNC_ENABLED&&window.__FB&&shouldSyncKey(k)){
-      const{db,ref,set}=window.__FB;
-      SYNC_ECHO[k]=Date.now();
-      set(ref(db,'data/'+k),v).catch(e=>{
-        logFBError(k,e);
-        const dot=document.getElementById('syncdot');if(dot)dot.style.background='#d63838';
-      });
-    }
-  };
-}else{
-  // _raw_set exists (sessions module already wrapped DB.set). Wrap _raw_set instead.
-  const _origRawSet=DB._raw_set;
-  DB._raw_set=function(k,v){
-    _origRawSet(k,v);
-    if(SYNC_ENABLED&&window.__FB&&shouldSyncKey(k)){
-      const{db,ref,set}=window.__FB;
-      SYNC_ECHO[k]=Date.now();
-      set(ref(db,'data/'+k),v).catch(e=>{
-        logFBError(k,e);
-        const dot=document.getElementById('syncdot');if(dot)dot.style.background='#d63838';
-      });
-    }
-  };
-}
+// Firebase push is handled by the localStorage.setItem interceptor (near DB definition).
+// Expose shouldSyncKey so the interceptor can use it.
+window.__shouldSync=shouldSyncKey;
 
 // Subscribe to real-time changes from other devices
 function subscribeToCollection(k){
@@ -3559,30 +3528,9 @@ function subscribeToCollection(k){
         const arr=[];keys.sort((a,b)=>+a-+b).forEach(kk=>arr.push(v[kk]));v=arr;
       }
     }
-    // SAFEGUARD: For collections that should only grow (records, not rosters), refuse to overwrite
-    // a non-empty local list with an empty cloud list. This prevents "wash away" if another device
-    // pushed up stale/empty data due to a fresh init or browser data wipe.
-    const APPEND_ONLY_COLLECTIONS=['accounts','sessions','schools','early_pickups','complaints','tasks','infractions','referrals',
-      'class_visits','notebook_checks','activities','activity_reports','exam_absents',
-      'reexam_schedules','daily_attendance','student_health','remedial_plans','vp_reports',
-      'warning_letters','teacher_achievements','behaviour','discipline','substitutions','activity_log'];
-    const baseKey=isSessionScopedKey(k)?k.replace(/_[^_]+$/,''):k;
-    if(APPEND_ONLY_COLLECTIONS.includes(baseKey)&&Array.isArray(v)){
-      try{
-        const existing=JSON.parse(localStorage.getItem('sms7_'+k)||'[]');
-        if(Array.isArray(existing)&&existing.length>v.length){
-          console.warn('[FB] Refused to overwrite '+k+' ('+existing.length+' local records) with shorter cloud version ('+v.length+' records). This protects against accidental data loss. Local data kept.');
-          // Push our local data UP to cloud to restore it for everyone
-          if(SYNC_ENABLED&&window.__FB){
-            const{set}=window.__FB;
-            SYNC_ECHO[k]=Date.now();
-            set(ref(db,'data/'+k),existing).catch(e=>logFBError(k,e));
-          }
-          return;
-        }
-      }catch(e){/* if parsing fails, proceed with overwrite */}
-    }
+    window.__fbSyncPaused=true;
     localStorage.setItem('sms7_'+k,JSON.stringify(v));
+    window.__fbSyncPaused=false;
     // For session-scoped keys, only refresh if the key matches the ACTIVE session (otherwise we'd refresh with stale data)
     let logicalKey=k;
     if(isSessionScopedKey(k)){
@@ -3662,6 +3610,7 @@ async function bootFirebaseSync(){
   
   SYNC_INITIAL_LOAD=true;
   SYNC_ENABLED=true;
+  window.__SYNC_ON=true;
   // Always push local data to Firebase (uses update/merge, won't overwrite richer cloud data)
   console.log('[FB] Pushing local data to cloud…');
   await syncUpAll();
@@ -3678,6 +3627,8 @@ async function bootFirebaseSync(){
     }
   }
   console.log('[FB] Real-time sync active for '+subscribed.size+' collections');
+  // Fix race condition: the .info/connected listener in the module script may have
+  // already fired true before updateSyncStatus was defined. Re-check current state.
   if(window.__FB&&window.__FB.connected!==undefined){
     updateSyncStatus(window.__FB.connected);
   }
