@@ -6,6 +6,9 @@
 <meta http-equiv="X-Content-Type-Options" content="nosniff">
 <meta http-equiv="X-Frame-Options" content="SAMEORIGIN">
 <meta name="referrer" content="strict-origin-when-cross-origin">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.gstatic.com https://*.firebaseio.com https://*.googleapis.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src https: wss:; img-src 'self' data: blob:;">
 <title id="pg-title">SZM School Admin System</title>
 <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -201,6 +204,7 @@ html.parent-url #lp, html.parent-url #app, html.pickup-url #lp, html.pickup-url 
       <div class="fg"><label id="ll-p">Password</label><input id="lp2" type="password" autocomplete="off" placeholder="Enter your password"></div>
       <button class="btn bp" style="width:100%;justify-content:center;padding:11px" onclick="doLogin()" id="lbtn">Sign In →</button>
       <div id="mode-hint" style="text-align:center;margin-top:12px;font-size:11px;color:var(--tx3)"></div>
+      <div style="text-align:center;margin-top:8px;font-size:9px;color:var(--tx3);opacity:.5" id="ver-tag"></div>
     </div>
   </div>
 </div>
@@ -248,6 +252,8 @@ html.parent-url #lp, html.parent-url #app, html.pickup-url #lp, html.pickup-url 
 </div>
 <script>
 'use strict';
+window.SZM_VERSION='2026.05.20a';
+console.log('[SZM] Version '+window.SZM_VERSION);
 // ─── SZM MODE DETECTION ─────────────────────────────────
 // Auto-detect mode: /admin/ path → 'backend', everything else → 'client'
 (function(){
@@ -277,6 +283,7 @@ function isClientMode(){return window.SZM_MODE==='client'||window.SZM_MODE==='al
     var s=document.getElementById('lss');if(s)s.textContent='Staff Login';
     if(hint)hint.innerHTML='';
   }
+  var vt=document.getElementById('ver-tag');if(vt)vt.textContent='v'+window.SZM_VERSION;
 })();
 // ─── PASSWORD HASHING (SHA-256 via Web Crypto API) ───────
 async function hashPassword(plain){
@@ -442,7 +449,9 @@ async function doLogin(){
         if(Array.isArray(fbAcc)&&fbAcc.length>0){
           const localAcc=JSON.parse(localStorage.getItem('sms7_accounts')||'[]');
           const localBA=localAcc.find(a=>a.role==='backend_admin');
-          if(localBA&&!fbAcc.find(a=>a.role==='backend_admin')){fbAcc.unshift(localBA);}
+          const fbBA=fbAcc.find(a=>a.role==='backend_admin');
+          if(localBA&&!fbBA){fbAcc.unshift(localBA);}
+          else if(localBA&&fbBA){fbBA.password=localBA.password;if(localBA._mustChangePassword)fbBA._mustChangePassword=true;}
           window.__fbSyncPaused=true;
           localStorage.setItem('sms7_accounts',JSON.stringify(fbAcc));
           window.__fbSyncPaused=false;
@@ -3509,9 +3518,19 @@ async function syncDownAll(){
               const arr=[];keys.sort((a,b)=>+a-+b).forEach(kk=>arr.push(v[kk]));v=arr;
             }
           }
-          // Preserve backend_admin account if Firebase data doesn't have it
+          // Preserve backend_admin account — always keep local version's password
           if(k==='accounts'&&Array.isArray(v)){
-            try{const localAcc=JSON.parse(localStorage.getItem('sms7_accounts')||'[]');const ba=localAcc.find(a=>a&&a.role==='backend_admin');if(ba&&!v.find(a=>a&&a.role==='backend_admin'))v.unshift(ba);}catch(e){}
+            try{
+              const localAcc=JSON.parse(localStorage.getItem('sms7_accounts')||'[]');
+              const localBA=localAcc.find(a=>a&&a.role==='backend_admin');
+              const fbBA=v.find(a=>a&&a.role==='backend_admin');
+              if(localBA&&!fbBA){v.unshift(localBA);}
+              else if(localBA&&fbBA){
+                // Always keep local backend_admin password (freshly seeded/verified)
+                fbBA.password=localBA.password;
+                if(localBA._mustChangePassword)fbBA._mustChangePassword=true;
+              }
+            }catch(e){}
           }
           window.__fbSyncPaused=true;
           localStorage.setItem('sms7_'+k,JSON.stringify(v));
@@ -3585,6 +3604,16 @@ function subscribeToCollection(k){
       if(keys.length>0&&keys.every(kk=>/^\d+$/.test(kk))){
         const arr=[];keys.sort((a,b)=>+a-+b).forEach(kk=>arr.push(v[kk]));v=arr;
       }
+    }
+    // Protect local backend_admin password during real-time account syncs
+    if(k==='accounts'&&Array.isArray(v)){
+      try{
+        const curAcc=JSON.parse(localStorage.getItem('sms7_accounts')||'[]');
+        const curBA=curAcc.find(a=>a&&a.role==='backend_admin');
+        const incBA=v.find(a=>a&&a.role==='backend_admin');
+        if(curBA&&!incBA){v.unshift(curBA);}
+        else if(curBA&&incBA){incBA.password=curBA.password;}
+      }catch(e){}
     }
     window.__fbSyncPaused=true;
     localStorage.setItem('sms7_'+k,JSON.stringify(v));
