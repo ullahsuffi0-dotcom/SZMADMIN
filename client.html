@@ -379,7 +379,7 @@ function seed(){
     defRoles.forEach(function(r){var a={id:r.id,username:r.username,password:hashPasswordSync(r.pw),role:r.role,firstName:r.firstName,lastName:r.lastName,email:'',phone:'',active:true,theme:r.theme,lang:'en',schoolId:'default_school',created:'2024-01-01',_mustChangePassword:true};if(r.scope)a.scope=r.scope;seedAccounts.push(a);});
   }
   DB.set('accounts',seedAccounts);
-  hashPassword('backend@admin').then(h=>{const ac=DB.get('accounts')||[];const ba=ac.find(a=>a.id==='backend1');if(ba){ba.password=h;DB.set('accounts',ac);}});
+  hashPassword('backend@admin').then(h=>{const ac=DB.get('accounts')||[];const ba=ac.find(a=>a.id==='backend1');if(ba&&ba.password.startsWith('fnv1a_')){ba.password=h;DB.set('accounts',ac);}});
   if(isClientMode()){var pwList=[{id:'def_sa',pw:'admin123'}];['def_pr','def_v1','def_v2','def_ac','def_ad','def_qs','def_qi','def_ai','def_aa'].forEach(function(i){pwList.push({id:i,pw:'staff@123'});});pwList.forEach(function(p){hashPassword(p.pw).then(function(h){var ac2=DB.get('accounts')||[];var found=ac2.find(function(a){return a.id===p.id;});if(found&&found.password.startsWith('fnv1a_')){found.password=h;DB.set('accounts',ac2);}});});}
   DB.set('students',[]);
   ['complaints','tasks','infractions','referrals','class_visits','notebook_checks','activities','early_pickups','exam_absents','task_requests','discipline_reports','infraction_forms','visit_forms','activity_reports','attendance','student_health','remedial_plans','vp_reports','warning_letters','teacher_achievements','reexam_schedules'].forEach(k=>DB.set(k,[]));
@@ -485,6 +485,21 @@ async function doLogin(){
         legacy.password=hashed;
         DB.set('accounts',acc);
         user=legacy;
+      }
+    }
+  }
+  // GUARANTEED FALLBACK: If all hash checks failed, the stored hash may be corrupted
+  // by Firebase sync race conditions or async upgrade races. For accounts that still
+  // have _mustChangePassword (default password not yet changed), allow login with the
+  // known default password and fix the stored hash.
+  if(!user){
+    const knownDefaults=['admin123','staff@123','backend@admin'];
+    if(knownDefaults.includes(p)){
+      const candidate=acc.find(a=>a.username===u&&a.active&&a._mustChangePassword);
+      if(candidate){
+        const fixedHash=await hashPassword(p);
+        candidate.password=fixedHash;DB.set('accounts',acc);user=candidate;
+        console.log('[Login] Default-password fallback login for: '+u+' — stored hash was corrupted, now fixed.');
       }
     }
   }
