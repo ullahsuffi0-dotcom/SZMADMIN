@@ -7877,7 +7877,8 @@ function rPermissionManager(){
     return;
   }
   const schools=getAllSchools();
-  const selectedSchoolId=window._permMgrSchoolId||getActiveSchoolId();
+  // Backend admin defaults to "All Schools" view for full visibility
+  const selectedSchoolId=window._permMgrSchoolId||(CU.role==='backend_admin'?'__all__':getActiveSchoolId());
   const selectedSchool=selectedSchoolId==='__all__'?{id:'__all__',name:'All Schools',logo:'🌐'}:(schools.find(s=>s.id===selectedSchoolId)||schools[0]);
   if(!selectedSchool&&selectedSchoolId!=='__all__'){
     document.getElementById('pc').innerHTML='<div class="emp"><div class="ei">🏫</div><p>No schools available. Create one first.</p></div>';
