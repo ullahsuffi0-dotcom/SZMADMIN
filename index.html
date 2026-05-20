@@ -429,9 +429,11 @@ async function doLogin(){
   if(typeof ensureAccountsExist==='function'){try{ensureAccountsExist();}catch(e){}}
 
   // Pull latest accounts from Firebase before checking credentials
-  if(window.__FB&&window.__FB.db){
+  if(window.__FB&&window.__FB.db&&window.__FB.connected){
     try{
-      const snap=await window.__FB.get(window.__FB.ref(window.__FB.db,'data/accounts'));
+      const fbPromise=window.__FB.get(window.__FB.ref(window.__FB.db,'data/accounts'));
+      const timeoutPromise=new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),3000));
+      const snap=await Promise.race([fbPromise,timeoutPromise]);
       if(snap.exists()){
         let fbAcc=snap.val();
         if(fbAcc&&typeof fbAcc==='object'&&!Array.isArray(fbAcc)){
@@ -447,7 +449,7 @@ async function doLogin(){
           window.__fbSyncPaused=false;
         }
       }
-    }catch(e){console.warn('[FB] Could not fetch accounts:',e);}
+    }catch(e){console.warn('[FB] Could not fetch accounts (timeout or offline):',e);}
   }
 
   if(typeof ensureAccountsExist==='function'){try{ensureAccountsExist();}catch(e){}}
@@ -668,7 +670,7 @@ function toast(msg,type='info'){const el=document.createElement('div');el.classN
 function openM(html,lg=false){document.getElementById('mr').innerHTML='<div class="mb" onclick="if(event.target===this)closeM()"><div class="mo'+(lg?' ml':'')+'">'+html+'</div></div>';}
 function closeM(){document.getElementById('mr').innerHTML='';}
 function nid(p){return p+Date.now()+Math.random().toString(36).slice(2,5);}
-function logA(action){const l=DB.get('activity_log')||[];l.unshift({user:CU.firstName+' '+CU.lastName,role:rL(CU.role),roleKey:CU.role,action,time:new Date().toISOString()});if(l.length>300)l.pop();DB.set('activity_log',l);}
+function logA(action){if(!CU)return;const l=DB.get('activity_log')||[];l.unshift({user:CU.firstName+' '+CU.lastName,role:rL(CU.role),roleKey:CU.role,action,time:new Date().toISOString()});if(l.length>300)l.pop();DB.set('activity_log',l);}
 function fN(s){return((s.firstName||'')+' '+(s.lastName||'')).trim();}
 function gS(id){return(DB.get('students')||[]).find(s=>s.id===id);}
 function gA(id){return(DB.get('accounts')||[]).find(a=>a.id===id);}
@@ -4509,6 +4511,8 @@ function getAllSessions(){
 
 // Initialize sessions on first run
 function initSessions(){
+  const _rGet=DB._raw_get||function(k){try{return JSON.parse(localStorage.getItem('sms7_'+k)||'null')}catch(e){return null}};
+  const _rSet=DB._raw_set||function(k,v){try{localStorage.setItem('sms7_'+k,JSON.stringify(v))}catch(e){}};
   const sessions=getAllSessions();
   if(!sessions.length){
     // Create a default session and migrate existing data
@@ -4524,21 +4528,21 @@ function initSessions(){
       createdBy:'system',
       isActive:true
     };
-    DB._raw_set('sessions',[defaultSession]);
+    _rSet('sessions',[defaultSession]);
     setActiveSessionId('default');
     // Migrate any pre-existing flat data into the default session bucket
     SESSION_SCOPED_KEYS.forEach(k=>{
-      const flat=DB._raw_get(k);
+      const flat=_rGet(k);
       if(flat&&Array.isArray(flat)&&flat.length){
-        const bucketed=DB._raw_get(k+'_default');
+        const bucketed=_rGet(k+'_default');
         if(!bucketed||!bucketed.length){
-          DB._raw_set(k+'_default',flat);
+          _rSet(k+'_default',flat);
         }
         // Optionally clear the flat key to save space (commented out for safety)
-        // DB._raw_set(k,[]);
+        // _rSet(k,[]);
       }
     });
-    logA&&logA('Initialized default academic session');
+    if(typeof logA==='function'&&typeof CU!=='undefined'&&CU)logA('Initialized default academic session');
   }else{
     // Make sure active is set
     if(!getActiveSessionId()){

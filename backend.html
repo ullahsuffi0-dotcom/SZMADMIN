@@ -427,10 +427,12 @@ async function doLogin(){
   if(typeof migrate==='function'){try{migrate();}catch(e){}}
   if(typeof ensureAccountsExist==='function'){try{ensureAccountsExist();}catch(e){}}
 
-  // Pull latest accounts from Firebase before checking credentials
-  if(window.__FB&&window.__FB.db){
+  // Pull latest accounts from Firebase before checking credentials (with 3s timeout)
+  if(window.__FB&&window.__FB.db&&window.__FB.connected){
     try{
-      const snap=await window.__FB.get(window.__FB.ref(window.__FB.db,'data/accounts'));
+      const fbPromise=window.__FB.get(window.__FB.ref(window.__FB.db,'data/accounts'));
+      const timeoutPromise=new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),3000));
+      const snap=await Promise.race([fbPromise,timeoutPromise]);
       if(snap.exists()){
         let fbAcc=snap.val();
         if(fbAcc&&typeof fbAcc==='object'&&!Array.isArray(fbAcc)){
@@ -438,7 +440,6 @@ async function doLogin(){
           if(ks.length>0&&ks.every(k=>/^\d+$/.test(k))){const a=[];ks.sort((x,y)=>+x-+y).forEach(k=>a.push(fbAcc[k]));fbAcc=a;}
         }
         if(Array.isArray(fbAcc)&&fbAcc.length>0){
-          // Preserve backend_admin if it exists locally but not in Firebase
           const localAcc=JSON.parse(localStorage.getItem('sms7_accounts')||'[]');
           const localBA=localAcc.find(a=>a.role==='backend_admin');
           if(localBA&&!fbAcc.find(a=>a.role==='backend_admin')){fbAcc.unshift(localBA);}
@@ -447,7 +448,7 @@ async function doLogin(){
           window.__fbSyncPaused=false;
         }
       }
-    }catch(e){console.warn('[FB] Could not fetch accounts:',e);}
+    }catch(e){console.warn('[FB] Could not fetch accounts (using local data):',e.message);}
   }
 
   // Ensure backend admin account exists after Firebase sync (Firebase may not have it)
@@ -670,7 +671,7 @@ function toast(msg,type='info'){const el=document.createElement('div');el.classN
 function openM(html,lg=false){document.getElementById('mr').innerHTML='<div class="mb" onclick="if(event.target===this)closeM()"><div class="mo'+(lg?' ml':'')+'">'+html+'</div></div>';}
 function closeM(){document.getElementById('mr').innerHTML='';}
 function nid(p){return p+Date.now()+Math.random().toString(36).slice(2,5);}
-function logA(action){const l=DB.get('activity_log')||[];l.unshift({user:CU.firstName+' '+CU.lastName,role:rL(CU.role),roleKey:CU.role,action,time:new Date().toISOString()});if(l.length>300)l.pop();DB.set('activity_log',l);}
+function logA(action){if(!CU)return;const l=DB.get('activity_log')||[];l.unshift({user:CU.firstName+' '+CU.lastName,role:rL(CU.role),roleKey:CU.role,action,time:new Date().toISOString()});if(l.length>300)l.pop();DB.set('activity_log',l);}
 function fN(s){return((s.firstName||'')+' '+(s.lastName||'')).trim();}
 function gS(id){return(DB.get('students')||[]).find(s=>s.id===id);}
 function gA(id){return(DB.get('accounts')||[]).find(a=>a.id===id);}
@@ -4510,11 +4511,12 @@ function getAllSessions(){
 
 // Initialize sessions on first run
 function initSessions(){
+  // Safe raw accessors — DB._raw_set may not exist during early boot (before wrapDB runs)
+  const _rGet=DB._raw_get||function(k){try{return JSON.parse(localStorage.getItem('sms7_'+k)||'null')}catch(e){return null}};
+  const _rSet=DB._raw_set||function(k,v){try{localStorage.setItem('sms7_'+k,JSON.stringify(v))}catch(e){}};
   const sessions=getAllSessions();
   if(!sessions.length){
-    // Create a default session and migrate existing data
     const today=new Date().toISOString().split('T')[0];
-    // Estimate end date as 12 months from today
     const future=new Date();future.setFullYear(future.getFullYear()+1);
     const defaultSession={
       id:'default',
@@ -4525,23 +4527,19 @@ function initSessions(){
       createdBy:'system',
       isActive:true
     };
-    DB._raw_set('sessions',[defaultSession]);
+    _rSet('sessions',[defaultSession]);
     setActiveSessionId('default');
-    // Migrate any pre-existing flat data into the default session bucket
     SESSION_SCOPED_KEYS.forEach(k=>{
-      const flat=DB._raw_get(k);
+      const flat=_rGet(k);
       if(flat&&Array.isArray(flat)&&flat.length){
-        const bucketed=DB._raw_get(k+'_default');
+        const bucketed=_rGet(k+'_default');
         if(!bucketed||!bucketed.length){
-          DB._raw_set(k+'_default',flat);
+          _rSet(k+'_default',flat);
         }
-        // Optionally clear the flat key to save space (commented out for safety)
-        // DB._raw_set(k,[]);
       }
     });
-    logA&&logA('Initialized default academic session');
+    if(typeof logA==='function'&&typeof CU!=='undefined'&&CU)logA('Initialized default academic session');
   }else{
-    // Make sure active is set
     if(!getActiveSessionId()){
       setActiveSessionId(sessions[0].id);
     }
