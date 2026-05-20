@@ -438,6 +438,9 @@ async function doLogin(){
           if(ks.length>0&&ks.every(k=>/^\d+$/.test(k))){const a=[];ks.sort((x,y)=>+x-+y).forEach(k=>a.push(fbAcc[k]));fbAcc=a;}
         }
         if(Array.isArray(fbAcc)&&fbAcc.length>0){
+          const localAcc=JSON.parse(localStorage.getItem('sms7_accounts')||'[]');
+          const localBA=localAcc.find(a=>a.role==='backend_admin');
+          if(localBA&&!fbAcc.find(a=>a.role==='backend_admin')){fbAcc.unshift(localBA);}
           window.__fbSyncPaused=true;
           localStorage.setItem('sms7_accounts',JSON.stringify(fbAcc));
           window.__fbSyncPaused=false;
@@ -445,6 +448,9 @@ async function doLogin(){
       }
     }catch(e){console.warn('[FB] Could not fetch accounts:',e);}
   }
+
+  if(typeof ensureAccountsExist==='function'){try{ensureAccountsExist();}catch(e){}}
+  await new Promise(r=>setTimeout(r,50));
 
   const acc=DB.get('accounts')||[];
   if(!acc.length){
@@ -3484,6 +3490,9 @@ async function syncDownAll(){
               const arr=[];keys.sort((a,b)=>+a-+b).forEach(kk=>arr.push(v[kk]));v=arr;
             }
           }
+          if(k==='accounts'&&Array.isArray(v)){
+            try{const localAcc=JSON.parse(localStorage.getItem('sms7_accounts')||'[]');const ba=localAcc.find(a=>a&&a.role==='backend_admin');if(ba&&!v.find(a=>a&&a.role==='backend_admin'))v.unshift(ba);}catch(e){}
+          }
           window.__fbSyncPaused=true;
           localStorage.setItem('sms7_'+k,JSON.stringify(v));
           window.__fbSyncPaused=false;
@@ -6077,6 +6086,7 @@ function showRoleSwitcherMenu(anchor,roles,currentRole){
       if(!modal)return;
       const a=(DB.get('accounts')||[]).find(x=>x.id===id);
       if(!a)return;
+      if(a.role==='backend_admin')return;
       // Skip if already injected
       if(document.getElementById('acc-extra-roles'))return;
       // Find a place to inject — look for the role field or fall back to appending
