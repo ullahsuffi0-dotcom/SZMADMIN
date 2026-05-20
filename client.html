@@ -6437,21 +6437,29 @@ function recycleBinAdd(collectionKey,removedItems){
       deletedAt:new Date().toISOString(),
       deletedBy:CU?(CU.firstName+' '+CU.lastName):'system',
       deletedById:CU?CU.id:null,
-      schoolId:getActiveSchoolId()
+      schoolId:typeof getActiveSchoolId==='function'?getActiveSchoolId():'default_school'
     });
   });
   const cutoff=new Date();cutoff.setDate(cutoff.getDate()-RECYCLE_TTL_DAYS);
   const filtered=bin.filter(e=>new Date(e.deletedAt)>cutoff);
   DB._raw_set('recycle_bin',filtered);
+  if(window.__FB&&window.__SYNC_ON){
+    try{var{db,ref,set}=window.__FB;set(ref(db,'data/recycle_bin'),filtered).catch(function(e){console.warn('[FB] Recycle bin sync failed:',e);});}catch(e){}
+  }
 }
 
 (function installRecycleHook(){
   if(DB._recycleHooked)return;
   const origSet=DB.set.bind(DB);
+  const RECYCLE_TRACKED_KEYS=['accounts','academic_calendar','announcements'];
   DB.set=function(k,v){
-    if(Array.isArray(v)&&typeof SESSION_SCOPED_KEYS!=='undefined'&&SESSION_SCOPED_KEYS.includes(k)){
+    const isTracked=Array.isArray(v)&&(
+      (typeof SESSION_SCOPED_KEYS!=='undefined'&&SESSION_SCOPED_KEYS.includes(k))||
+      RECYCLE_TRACKED_KEYS.includes(k)
+    );
+    if(isTracked){
       try{
-        const prev=DB.get(k);
+        const prev=RECYCLE_TRACKED_KEYS.includes(k)?(DB._raw_get?DB._raw_get(k):origSet.call?DB.get(k):null):DB.get(k);
         if(Array.isArray(prev)&&prev.length>v.length){
           const newIds=new Set(v.map(x=>x&&x.id).filter(Boolean));
           const removed=prev.filter(x=>x&&x.id&&!newIds.has(x.id));
@@ -7061,8 +7069,9 @@ DB.get=function(k){
     return getAccountsForSchool(CU.schoolId||'default_school');
   }
   if(k==='accounts'&&typeof CU!=='undefined'&&CU&&CU.role==='backend_admin'){
-    // Backend admin sees accounts for the currently-active school
-    return getAccountsForSchool(getCurrentSchoolId());
+    // Backend admin sees ALL accounts across all schools — no restrictions
+    const allRaw=(DB._raw_get?DB._raw_get('accounts'):JSON.parse(localStorage.getItem('sms7_accounts')||'[]'))||[];
+    return allRaw;
   }
   return _origDBGet(k);
 };
@@ -7071,28 +7080,27 @@ DB.get=function(k){
 const _origDBSet=DB.set;
 DB.set=function(k,v){
   if(k==='accounts'&&Array.isArray(v)&&typeof CU!=='undefined'&&CU){
-    // We're being given the visible (filtered) account list. Merge back with other schools' accounts.
+    if(CU.role==='backend_admin'){
+      // Backend admin sees ALL accounts — write directly without merge
+      return _origDBSet(k,v);
+    }
+    // Regular staff: merge back with other schools' accounts
     const allRaw=(DB._raw_get?DB._raw_get('accounts'):JSON.parse(localStorage.getItem('sms7_accounts')||'[]'))||[];
-    const myScope=CU.role==='backend_admin'?getCurrentSchoolId():(CU.schoolId||'default_school');
-    // Keep accounts from OTHER schools, plus backend_admin
+    const myScope=CU.schoolId||'default_school';
     const otherSchools=allRaw.filter(a=>{
-      if(a.role==='backend_admin')return false; // we'll handle BA separately
+      if(a.role==='backend_admin')return false;
       if(myScope==='default_school'){
         return a.schoolId&&a.schoolId!=='default_school';
       }
       return a.schoolId!==myScope;
     });
-    // Backend admin entries — keep all from the raw list (since the filtered view always includes them)
     const backendAdmins=allRaw.filter(a=>a.role==='backend_admin');
-    // Ensure new accounts written by us get the schoolId stamp
     const stamped=v.map(a=>{
-      if(a.role==='backend_admin')return a; // BA has no schoolId
+      if(a.role==='backend_admin')return a;
       if(!a.schoolId)return{...a,schoolId:myScope};
       return a;
     });
-    // From `stamped`, exclude backend admins (since we keep them via `backendAdmins`)
     const stampedNoBA=stamped.filter(a=>a.role!=='backend_admin');
-    // New BA list = whatever BAs are in `stamped` (could include edits) OR fall back to existing
     const baInStamped=stamped.filter(a=>a.role==='backend_admin');
     const finalBA=baInStamped.length?baInStamped:backendAdmins;
     const merged=[...finalBA,...otherSchools,...stampedNoBA];
@@ -7416,7 +7424,8 @@ async function saveAccountEditForSchool(accId,schoolId){
 function delAccountForSchool(accId,schoolId){
   const all=DB._raw_get('accounts')||[];
   const a=all.find(x=>x.id===accId);if(!a)return;
-  if(!confirm('Delete account "'+a.username+'"? This cannot be undone (only soft-deletes from this view).'))return;
+  if(!confirm('Delete account "'+a.username+'"?'))return;
+  if(typeof recycleBinAdd==='function')recycleBinAdd('accounts',[a]);
   DB._raw_set('accounts',all.filter(x=>x.id!==accId));
   logA('Backend Admin deleted account '+a.username);
   toast('Account deleted','danger');
@@ -7833,27 +7842,33 @@ function rPermissionManager(){
   }
   const schools=getAllSchools();
   const selectedSchoolId=window._permMgrSchoolId||getActiveSchoolId();
-  const selectedSchool=schools.find(s=>s.id===selectedSchoolId)||schools[0];
-  if(!selectedSchool){
+  const selectedSchool=selectedSchoolId==='__all__'?{id:'__all__',name:'All Schools',logo:'🌐'}:(schools.find(s=>s.id===selectedSchoolId)||schools[0]);
+  if(!selectedSchool&&selectedSchoolId!=='__all__'){
     document.getElementById('pc').innerHTML='<div class="emp"><div class="ei">🏫</div><p>No schools available. Create one first.</p></div>';
     return;
   }
-  
+
   const allAccounts=DB._raw_get('accounts')||[];
   const schoolStaff=allAccounts.filter(a=>{
     if(a.role==='backend_admin')return false;
+    if(CU.role==='backend_admin'){
+      if(selectedSchoolId==='__all__')return true;
+      if(selectedSchoolId==='default_school')return!a.schoolId||a.schoolId==='default_school';
+      return a.schoolId===selectedSchoolId||(!a.schoolId&&selectedSchoolId==='default_school');
+    }
     if(selectedSchoolId==='default_school')return!a.schoolId||a.schoolId==='default_school';
     return a.schoolId===selectedSchoolId;
   });
-  
+
   document.getElementById('pc').innerHTML='<div class="card" style="margin-bottom:13px;background:linear-gradient(135deg,#9d4edd 0%,#5a189a 100%);color:#fff"><h3 style="margin:0 0 5px 0;color:#fff">🛡️ Permission Manager</h3><div style="font-size:12px;opacity:.9">Configure what each staff member can see, edit, or has hidden — per school, per page.</div></div>'
-  
+
   // School picker
-  +'<div class="card" style="margin-bottom:13px"><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><label style="font-size:12px;font-weight:600;margin:0">🏫 School:</label><select id="pm-school" onchange="permMgrSelectSchool(this.value)" style="flex:1;min-width:240px;padding:9px 11px;background:var(--sf2);border:1px solid var(--bd);border-radius:var(--rs);color:var(--tx);font-size:13px">'+schools.map(s=>'<option value="'+s.id+'"'+(s.id===selectedSchoolId?' selected':'')+'>'+esc(s.logo||'🎓')+' '+esc(s.name)+(s.city?' — '+esc(s.city):'')+'</option>').join('')+'</select><div style="font-size:11px;color:var(--tx3)">'+schoolStaff.length+' staff member(s)</div></div></div>'
-  
-  +(schoolStaff.length?'<div class="card"><div class="sh2"><h3>👥 Staff in '+esc(selectedSchool.name)+'</h3></div><div class="tw"><table><thead><tr><th>Staff Member</th><th>Role</th><th>Status</th><th>Permission Overrides</th><th>Actions</th></tr></thead><tbody>'+schoolStaff.map(a=>{
+  +'<div class="card" style="margin-bottom:13px"><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><label style="font-size:12px;font-weight:600;margin:0">🏫 School:</label><select id="pm-school" onchange="permMgrSelectSchool(this.value)" style="flex:1;min-width:240px;padding:9px 11px;background:var(--sf2);border:1px solid var(--bd);border-radius:var(--rs);color:var(--tx);font-size:13px">'+(CU.role==='backend_admin'?'<option value="__all__"'+(selectedSchoolId==='__all__'?' selected':'')+'>🌐 All Schools (View All Staff)</option>':'')+schools.map(s=>'<option value="'+s.id+'"'+(s.id===selectedSchoolId?' selected':'')+'>'+esc(s.logo||'🎓')+' '+esc(s.name)+(s.city?' — '+esc(s.city):'')+'</option>').join('')+'</select><div style="font-size:11px;color:var(--tx3)">'+schoolStaff.length+' staff member(s)</div></div></div>'
+
+  +(schoolStaff.length?'<div class="card"><div class="sh2"><h3>👥 '+(selectedSchoolId==='__all__'?'All Staff Across All Schools':'Staff in '+esc(selectedSchool?selectedSchool.name:''))+'</h3></div><div class="tw"><table><thead><tr><th>Staff Member</th><th>Role</th>'+(selectedSchoolId==='__all__'?'<th>School</th>':'')+'<th>Status</th><th>Permission Overrides</th><th>Actions</th></tr></thead><tbody>'+schoolStaff.map(a=>{
     const overrideCount=Object.keys(a.permissions||{}).length;
-    return'<tr><td><strong>'+esc((a.firstName||'')+' '+(a.lastName||''))+'</strong><br><code style="font-size:10px;color:var(--tx3)">'+esc(a.username)+'</code></td><td><span class="badge bbl">'+rL(a.role)+'</span>'+(Array.isArray(a.extraRoles)&&a.extraRoles.length?'<br><span style="font-size:9px;color:var(--tx3)">+'+a.extraRoles.length+' extra</span>':'')+'</td><td>'+(a.active?'<span class="badge bgn">Active</span>':'<span class="badge bgr">Disabled</span>')+'</td><td>'+(overrideCount?'<span class="badge bgo">'+overrideCount+' override(s)</span>':'<span style="font-size:11px;color:var(--tx3)">Default (no overrides)</span>')+'</td><td style="display:flex;gap:4px;flex-wrap:wrap"><button class="btn bp bxs" onclick="permMgrEditStaff(\''+a.id+'\',\''+selectedSchoolId+'\')">🛡️ Configure</button><button class="btn '+(a.active?'bd3':'bg')+' bxs" onclick="permMgrToggleActive(\''+a.id+'\',\''+selectedSchoolId+'\')">'+(a.active?'⏸️ Disable':'▶️ Enable')+'</button><button class="btn bd3 bxs" onclick="permMgrDeleteStaff(\''+a.id+'\',\''+selectedSchoolId+'\')">🗑️</button></td></tr>';
+    const aSchool=selectedSchoolId==='__all__'?schools.find(s=>s.id===(a.schoolId||'default_school')):null;
+    return'<tr><td><strong>'+esc((a.firstName||'')+' '+(a.lastName||''))+'</strong><br><code style="font-size:10px;color:var(--tx3)">'+esc(a.username)+'</code></td><td><span class="badge bbl">'+rL(a.role)+'</span>'+(Array.isArray(a.extraRoles)&&a.extraRoles.length?'<br><span style="font-size:9px;color:var(--tx3)">+'+a.extraRoles.length+' extra</span>':'')+'</td>'+(selectedSchoolId==='__all__'?'<td style="font-size:11px">'+(aSchool?esc(aSchool.name):esc(a.schoolId||'default'))+'</td>':'')+'<td>'+(a.active?'<span class="badge bgn">Active</span>':'<span class="badge bgr">Disabled</span>')+'</td><td>'+(overrideCount?'<span class="badge bgo">'+overrideCount+' override(s)</span>':'<span style="font-size:11px;color:var(--tx3)">Default (no overrides)</span>')+'</td><td style="display:flex;gap:4px;flex-wrap:wrap"><button class="btn bp bxs" onclick="permMgrEditStaff(\''+a.id+'\',\''+(a.schoolId||'default_school')+'\')">🛡️ Configure</button><button class="btn '+(a.active?'bd3':'bg')+' bxs" onclick="permMgrToggleActive(\''+a.id+'\',\''+(a.schoolId||'default_school')+'\')">'+(a.active?'⏸️ Disable':'▶️ Enable')+'</button><button class="btn bd3 bxs" onclick="permMgrDeleteStaff(\''+a.id+'\',\''+(a.schoolId||'default_school')+'\')">🗑️</button></td></tr>';
   }).join('')+'</tbody></table></div></div>'
   :'<div class="emp" style="padding:30px"><div class="ei">👥</div><p>No staff in this school yet</p><div style="font-size:11px;color:var(--tx3);margin-top:5px">Add accounts via the Schools page or directly from this school\'s account management.</div><button class="btn bp bsm" style="margin-top:10px" onclick="viewSchoolAccounts(\''+selectedSchoolId+'\')">+ Add Staff</button></div>')
   
@@ -7889,7 +7904,8 @@ function permMgrDeleteStaff(accId,schoolId){
   const all=DB._raw_get('accounts')||[];
   const a=all.find(x=>x.id===accId);
   if(!a)return;
-  if(!confirm('⚠️ DELETE account "'+a.username+'"?\n\nThis cannot be undone (the account is permanently removed).'))return;
+  if(!confirm('⚠️ DELETE account "'+a.username+'"?'))return;
+  if(typeof recycleBinAdd==='function')recycleBinAdd('accounts',[a]);
   DB._raw_set('accounts',all.filter(x=>x.id!==accId));
   logA('Backend Admin deleted account: '+a.username);
   toast('Account deleted','danger');
