@@ -442,8 +442,16 @@ async function doLogin(){
   if(typeof migrate==='function'){try{migrate();}catch(e){}}
   if(typeof ensureAccountsExist==='function'){try{ensureAccountsExist();}catch(e){}}
 
+  // CRITICAL: wait for Firebase SDK to load if it hasn't yet — otherwise we'd
+  // log in against stale localStorage and never see password changes from
+  // other devices. Block up to 8s; if not ready, fall through to local-only.
+  if(typeof waitForFirebase==='function'){
+    const fbReady=await waitForFirebase(8000);
+    if(!fbReady){console.warn('[Login] Firebase SDK not loaded after 8s — using local accounts only');}
+  }
+
   // Pull latest accounts from Firebase before checking credentials
-  if(window.__FB&&window.__FB.db&&window.__FB.connected){
+  if(window.__FB&&window.__FB.db){
     try{
       const fbPromise=window.__FB.get(window.__FB.ref(window.__FB.db,'data/accounts'));
       const timeoutPromise=new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),3000));

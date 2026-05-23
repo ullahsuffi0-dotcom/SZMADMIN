@@ -432,6 +432,15 @@ async function doLogin(){
   if(typeof migrate==='function'){try{migrate();}catch(e){}}
   if(typeof ensureAccountsExist==='function'){try{ensureAccountsExist();}catch(e){}}
 
+  // CRITICAL: wait for Firebase SDK to load if it hasn't yet — otherwise we'd
+  // log in against stale localStorage and never see password changes from
+  // other devices. Block up to 8s; if Firebase still isn't ready, fall through
+  // to local-only login with a warning.
+  if(typeof waitForFirebase==='function'){
+    const fbReady=await waitForFirebase(8000);
+    if(!fbReady){console.warn('[Login] Firebase SDK not loaded after 8s — using local accounts only');}
+  }
+
   // Pull latest accounts from Firebase before checking credentials
   if(window.__FB&&window.__FB.db){
     try{
@@ -446,9 +455,14 @@ async function doLogin(){
           window.__fbSyncPaused=true;
           localStorage.setItem('sms7_accounts',JSON.stringify(fbAcc));
           window.__fbSyncPaused=false;
+          console.log('[Login] Pulled '+fbAcc.length+' accounts from Firebase');
         }
+      }else{
+        console.warn('[Login] Firebase has no accounts at /data/accounts');
       }
     }catch(e){console.warn('[FB] Could not fetch accounts:',e);}
+  }else{
+    toast('⚠ Cloud connection unavailable — login may use stale data','danger');
   }
 
   const acc=DB.get('accounts')||[];
