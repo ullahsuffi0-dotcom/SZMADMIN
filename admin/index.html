@@ -337,11 +337,15 @@ window.__fbSyncPaused=false;
 const _origLSsetItem=localStorage.setItem.bind(localStorage);
 localStorage.setItem=function(k,v){
   _origLSsetItem(k,v);
-  if(!k.startsWith('sms7_')||window.__fbSyncPaused||!window.__SYNC_ON||!window.__FB)return;
+  if(!k.startsWith('sms7_')||window.__fbSyncPaused||!window.__FB||!window.__FB.db)return;
   var key=k.substring(5);
   if(!window.__shouldSync||!window.__shouldSync(key))return;
   var{db,ref,set}=window.__FB;
-  try{set(ref(db,'data/'+key),JSON.parse(v)).catch(function(e){console.warn('[FB] Write failed:'+key,e.message);});}catch(e){}
+  try{
+    var parsed=JSON.parse(v);
+    if(parsed===null||parsed===undefined)return;
+    set(ref(db,'data/'+key),parsed).then(function(){window.__lastSyncOk=Date.now();}).catch(function(e){console.warn('[FB] Write failed:'+key,e.message);});
+  }catch(e){}
 };
 const RL={superadmin:{en:'Super Admin',ar:'مدير النظام'},principal:{en:'Principal',ar:'مدير المدرسة'},vice_principal:{en:'Vice Principal',ar:'وكيل المدرسة'},academic_supervisor:{en:'Academic Supervisor',ar:'المشرف الأكاديمي'},student_advisor:{en:'Student Advisor',ar:'المرشد الطلابي'},activity_incharge:{en:'Activity Incharge',ar:'مسؤول الأنشطة'},quality_supervisor:{en:'Quality Supervisor',ar:'مشرف الجودة'},quality_incharge:{en:'Quality Incharge',ar:'مسؤول الجودة'},admin_assistant:{en:'Admin Assistant',ar:'المساعد الإداري'},teacher:{en:'Teacher',ar:'معلم'}};
 function rL(r){return RL[r]?.[_lang]||RL[r]?.en||r;}
@@ -517,6 +521,7 @@ async function submitForcePassword(){
   const i=acc.findIndex(a=>a.id===CU.id);
   if(i<0)return;
   acc[i].password=await hashPassword(nw);
+  acc[i]._pwdChangedAt=new Date().toISOString();
   delete acc[i]._mustChangePassword;
   DB.set('accounts',acc);
   CU=acc[i];
@@ -813,7 +818,7 @@ function rProfile(){
   +'</table>'+(CU.role==='superadmin'?'<div class="dv"></div><div style="font-size:12px;font-weight:600;margin-bottom:8px">👁️ View as Staff Member</div><div class="fg" style="margin-bottom:6px"><select id="imps" style="width:100%;padding:9px 11px;background:var(--sf2);border:1px solid var(--bd);border-radius:var(--rs);color:var(--tx)"><option value="">— Select staff to view as —</option>'+(DB.get('accounts')||[]).filter(a=>a.role!=='superadmin'&&a.role!=='backend_admin'&&a.active).map(a=>'<option value="'+a.id+'">'+a.firstName+' '+a.lastName+' ('+rL(a.role)+')</option>').join('')+'</select></div><button class="btn bo bsm" onclick="impUser(document.getElementById(\'imps\').value)">👁️ Open Their Account →</button>':'')+'</div></div></div>';
 }
 function saveProf(){const fn=document.getElementById('pfn').value.trim(),ln=document.getElementById('pln').value.trim();if(!fn||!ln){toast('Name required','danger');return;}const acc=DB.get('accounts')||[];const i=acc.findIndex(a=>a.id===CU.id);if(i<0)return;const oldFullName=((acc[i].firstName||'')+' '+(acc[i].lastName||'')).trim().toLowerCase();acc[i].firstName=fn;acc[i].lastName=ln;acc[i].email=document.getElementById('pem').value.trim();acc[i].phone=document.getElementById('pph').value.trim();DB.set('accounts',acc);CU.firstName=fn;CU.lastName=ln;CU.email=acc[i].email;CU.phone=acc[i].phone;document.getElementById('sbun').textContent=fn+' '+ln;document.getElementById('sbav').textContent=((fn[0]||'')+(ln[0]||'')).toUpperCase();/* If teacher, also update the linked teacher record */if((CU._origRole||CU.role)==='teacher'){const teachers=DB.get('teachers')||[];const newFullName=(fn+' '+ln).trim();let tchIdx=teachers.findIndex(t=>((t.firstName||'')+' '+(t.lastName||'')).trim().toLowerCase()===oldFullName);if(tchIdx<0)tchIdx=teachers.findIndex(t=>(t.name||'').trim().toLowerCase()===oldFullName);/* Also handle subject input if present */const subjEl=document.getElementById('p-subject');if(tchIdx>=0){teachers[tchIdx].firstName=fn;teachers[tchIdx].lastName=ln;teachers[tchIdx].name=newFullName;teachers[tchIdx].phone=acc[i].phone;teachers[tchIdx].email=acc[i].email;if(subjEl)teachers[tchIdx].subject=subjEl.value.trim();DB.set('teachers',teachers);}else if(subjEl&&subjEl.value.trim()){/* No existing teacher record — create one */teachers.push({id:'tch'+Date.now(),name:newFullName,firstName:fn,lastName:ln,subject:subjEl.value.trim(),phone:acc[i].phone,email:acc[i].email,active:true,created:new Date().toISOString().split('T')[0]});DB.set('teachers',teachers);}}logA('Updated profile');toast(T('save_profile')+' ✓','success');rProfile();}
-async function chgPwd(){const cur=document.getElementById('pcur').value,nw=document.getElementById('pnw').value,cf=document.getElementById('pcf').value;if(!cur||!nw||!cf){toast('Fill all password fields','danger');return;}const acc=DB.get('accounts')||[];const i=acc.findIndex(a=>a.id===CU.id);if(i<0)return;const curHash=await hashPassword(cur);if(acc[i].password!==curHash&&acc[i].password!==cur){toast('Current password incorrect','danger');return;}if(nw.length<8){toast('Min 8 characters','danger');return;}if(nw!==cf){toast('Passwords do not match','danger');return;}acc[i].password=await hashPassword(nw);delete acc[i]._mustChangePassword;DB.set('accounts',acc);CU=acc[i];['pcur','pnw','pcf'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});logA('Changed password');toast(T('change_password')+' ✓','success');}
+async function chgPwd(){const cur=document.getElementById('pcur').value,nw=document.getElementById('pnw').value,cf=document.getElementById('pcf').value;if(!cur||!nw||!cf){toast('Fill all password fields','danger');return;}const acc=DB.get('accounts')||[];const i=acc.findIndex(a=>a.id===CU.id);if(i<0)return;const curHash=await hashPassword(cur);if(acc[i].password!==curHash&&acc[i].password!==cur){toast('Current password incorrect','danger');return;}if(nw.length<8){toast('Min 8 characters','danger');return;}if(nw!==cf){toast('Passwords do not match','danger');return;}acc[i].password=await hashPassword(nw);acc[i]._pwdChangedAt=new Date().toISOString();delete acc[i]._mustChangePassword;DB.set('accounts',acc);CU=acc[i];if(acc[i].firebaseEmail&&window.__FB_AUTH&&window.__FB&&window.__FB.auth){try{const fbUser=window.__FB.auth.currentUser;if(fbUser&&fbUser.email===acc[i].firebaseEmail){const{updatePassword}=await import('https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js');await updatePassword(fbUser,nw);}}catch(e){console.warn('[FB] Auth password update failed:',e);}}['pcur','pnw','pcf'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});logA('Changed password');toast(T('change_password')+' ✓','success');}
 function setTheme(k){applyTheme(k);const acc=DB.get('accounts')||[];const i=acc.findIndex(a=>a.id===CU.id);if(i>=0){acc[i].theme=k;DB.set('accounts',acc);CU.theme=k;}document.getElementById('sbav').style.background=TH[k]?.a||'var(--ac)';toast('Theme: '+TH[k]?.n,'success');rProfile();}
 function rCalendar(){
   const evts=(DB.get('academic_calendar')||[]).sort((a,b)=>a.date.localeCompare(b.date));const isSA=CU.role==='superadmin';const today=new Date();today.setHours(0,0,0,0);
@@ -3424,7 +3429,8 @@ const AUTO_REFRESH_MAP = {
   teacher_achievements: ['rTeacherAchievements'], settings: ['rSettings'],
   reexam_schedules: ['rReexam'],
   duty_rosters: ['rDutyRoster','rMyDuties'], substitutions: ['rSubstitutions','rMyDuties'],
-  sessions: ['rSessions'], active_session_id: ['rSessions']
+  sessions: ['rSessions'], active_session_id: ['rSessions'],
+  recycle_bin: ['rRecycleBin'], schools: ['rSchools']
 };
 
 let SYNC_ENABLED = false;
@@ -3588,12 +3594,19 @@ async function bootFirebaseSync(){
   // Seed is idempotent (checks sv7 flag) — won't overwrite if already done.
   if(!window.__seedDone){try{window.__doSeedAndStart();}catch(e){console.warn('[FB] Seed error:',e);}window.__seedDone=true;}
   
-  const ok=await waitForFirebase(4000);
+  let ok=await waitForFirebase(30000);
   if(!ok){
-    console.warn('[FB] Firebase SDK did not load within 4s — running in local-only mode');
+    console.warn('[FB] Firebase SDK slow to load — will retry in background');
     updateSyncStatus(false);
+    (async function retryBoot(){
+      while(!window.__FB||!window.__FB.db){await new Promise(r=>setTimeout(r,2000));}
+      console.log('[FB] Firebase finally available, completing boot');
+      bootFirebaseSync();
+    })();
     return;
   }
+  window.__SYNC_ON=true;
+  SYNC_ENABLED=true;
   try{
   console.log('[FB] SDK loaded. Pulling initial data from cloud…');
   const hadData=await syncDownAll();
@@ -4704,6 +4717,14 @@ function delSession(id){
   if(!confirm('⚠️ DELETE SESSION "'+s.name+'"?\n\nThis will permanently delete ALL students, teachers, attendance, complaints, and records associated with this session. This CANNOT be undone.\n\nType the session name in the next prompt to confirm.'))return;
   const typed=prompt('Type "'+s.name+'" exactly to confirm deletion:');
   if(typed!==s.name){toast('Session name did not match — deletion cancelled','danger');return;}
+  // Capture all session data into recycle bin before deleting
+  if(typeof recycleBinAdd==='function'){
+    recycleBinAdd('sessions',[Object.assign({},s,{_sessionData:true})]);
+    SESSION_SCOPED_KEYS.forEach(k=>{
+      const data=DB._raw_get(k+'_'+id)||[];
+      if(Array.isArray(data)&&data.length)recycleBinAdd(k,data);
+    });
+  }
   // Delete all session-scoped data
   SESSION_SCOPED_KEYS.forEach(k=>{
     DB._raw_set(k+'_'+id,null);
@@ -6392,21 +6413,44 @@ const RECYCLE_TTL_DAYS=30;
 
 function recycleBinAdd(collectionKey,removedItems){
   if(!removedItems||!removedItems.length)return;
-  const bin=DB._raw_get('recycle_bin')||[];
-  removedItems.forEach(item=>{
-    bin.push({
-      id:'rec'+Date.now()+'_'+Math.random().toString(36).slice(2,7),
-      collection:collectionKey,
-      item,
-      deletedAt:new Date().toISOString(),
-      deletedBy:CU?(CU.firstName+' '+CU.lastName):'system',
-      deletedById:CU?CU.id:null,
-      schoolId:getActiveSchoolId()
-    });
-  });
+  const newEntries=removedItems.map((item,idx)=>({
+    id:'rec'+Date.now()+'_'+idx+'_'+Math.random().toString(36).slice(2,7),
+    collection:collectionKey,
+    item,
+    deletedAt:new Date().toISOString(),
+    deletedBy:CU?(CU.firstName+' '+CU.lastName):'system',
+    deletedById:CU?CU.id:null,
+    schoolId:typeof getActiveSchoolId==='function'?getActiveSchoolId():'default_school'
+  }));
+  const localBin=DB._raw_get('recycle_bin')||[];
+  const localIds=new Set(localBin.map(e=>e.id));
+  newEntries.forEach(e=>{if(!localIds.has(e.id))localBin.push(e);});
   const cutoff=new Date();cutoff.setDate(cutoff.getDate()-RECYCLE_TTL_DAYS);
-  const filtered=bin.filter(e=>new Date(e.deletedAt)>cutoff);
-  DB._raw_set('recycle_bin',filtered);
+  const localFiltered=localBin.filter(e=>new Date(e.deletedAt)>cutoff);
+  DB._raw_set('recycle_bin',localFiltered);
+  if(window.__FB&&window.__FB.db){
+    (async function(){
+      try{
+        const{db,ref,get,set}=window.__FB;
+        const snap=await get(ref(db,'data/recycle_bin'));
+        let cloudBin=snap.exists()?snap.val():[];
+        if(cloudBin&&typeof cloudBin==='object'&&!Array.isArray(cloudBin)){
+          const ks=Object.keys(cloudBin);
+          if(ks.length>0&&ks.every(k=>/^\d+$/.test(k))){const a=[];ks.sort((x,y)=>+x-+y).forEach(k=>a.push(cloudBin[k]));cloudBin=a;}else cloudBin=Object.values(cloudBin);
+        }
+        if(!Array.isArray(cloudBin))cloudBin=[];
+        const seen=new Set();
+        const merged=[];
+        [...cloudBin,...localBin,...newEntries].forEach(e=>{if(e&&e.id&&!seen.has(e.id)){seen.add(e.id);merged.push(e);}});
+        const finalFiltered=merged.filter(e=>new Date(e.deletedAt)>cutoff);
+        await set(ref(db,'data/recycle_bin'),finalFiltered);
+        window.__fbSyncPaused=true;
+        localStorage.setItem('sms7_recycle_bin',JSON.stringify(finalFiltered));
+        window.__fbSyncPaused=false;
+        console.log('[FB] Recycle bin merged: '+finalFiltered.length+' total entries');
+      }catch(e){console.warn('[FB] Recycle bin merge failed:',e);}
+    })();
+  }
 }
 
 (function installRecycleHook(){
@@ -6567,10 +6611,28 @@ function delSchool(id){
 
 // ─── RECYCLE BIN PAGE ─────────────────────────────────────
 
-function rRecycleBin(){
+async function rRecycleBin(){
   if(!['backend_admin','superadmin'].includes(CU.role)){
     document.getElementById('pc').innerHTML='<div class="emp"><div class="ei">🔒</div><p>Access restricted</p></div>';
     return;
+  }
+  if(window.__FB&&window.__FB.db){
+    try{
+      const{db,ref,get}=window.__FB;
+      const snap=await get(ref(db,'data/recycle_bin'));
+      if(snap.exists()){
+        let v=snap.val();
+        if(v&&typeof v==='object'&&!Array.isArray(v)){
+          const ks=Object.keys(v);
+          if(ks.length>0&&ks.every(k=>/^\d+$/.test(k))){const a=[];ks.sort((x,y)=>+x-+y).forEach(k=>a.push(v[k]));v=a;}
+        }
+        if(Array.isArray(v)){
+          window.__fbSyncPaused=true;
+          localStorage.setItem('sms7_recycle_bin',JSON.stringify(v));
+          window.__fbSyncPaused=false;
+        }
+      }
+    }catch(e){console.warn('[FB] Recycle bin pull failed:',e);}
   }
   const bin=DB._raw_get('recycle_bin')||[];
   const cutoff=new Date();cutoff.setDate(cutoff.getDate()-RECYCLE_TTL_DAYS);
@@ -6578,7 +6640,7 @@ function rRecycleBin(){
   if(active.length!==bin.length)DB._raw_set('recycle_bin',active);
   const byCol={};
   active.forEach(e=>{if(!byCol[e.collection])byCol[e.collection]=[];byCol[e.collection].push(e);});
-  document.getElementById('pc').innerHTML='<div class="card" style="margin-bottom:13px"><div class="sh2"><h3>♻️ Recycle Bin ('+active.length+')</h3>'+(active.length?'<button class="btn bd3 bsm" onclick="emptyRecycleBin()">🗑️ Empty All</button>':'')+'</div><div style="font-size:11px;color:var(--tx3);margin-top:4px">Deleted items are kept here for '+RECYCLE_TTL_DAYS+' days before being permanently removed.</div></div>'
+  document.getElementById('pc').innerHTML='<div class="card" style="margin-bottom:13px"><div class="sh2"><h3>♻️ Recycle Bin ('+active.length+')</h3><div style="display:flex;gap:6px"><button class="btn bg2 bsm" onclick="rRecycleBin()">🔄 Refresh</button>'+(active.length?'<button class="btn bd3 bsm" onclick="emptyRecycleBin()">🗑️ Empty All</button>':'')+'</div></div><div style="font-size:11px;color:var(--tx3);margin-top:4px">Deleted items are kept here for '+RECYCLE_TTL_DAYS+' days. Shows deletions from ALL schools and devices.</div></div>'
   +(active.length?Object.entries(byCol).sort(([a],[b])=>a.localeCompare(b)).map(([col,entries])=>{
     return'<div class="card" style="margin-bottom:11px"><div class="sh2"><h3>📦 '+esc(col.replace(/_/g,' ').replace(/\b\w/g,m=>m.toUpperCase()))+' ('+entries.length+')</h3><button class="btn bg2 bxs" onclick="restoreAllFromBin(\''+col+'\')">↩️ Restore All</button></div><div class="tw"><table><thead><tr><th>Item</th><th>Deleted</th><th>By</th><th>Days Left</th><th>Actions</th></tr></thead><tbody>'+entries.slice().sort((a,b)=>(b.deletedAt||'').localeCompare(a.deletedAt||'')).map(e=>{
       const daysLeft=Math.max(0,RECYCLE_TTL_DAYS-Math.floor((Date.now()-new Date(e.deletedAt).getTime())/86400000));
@@ -7346,6 +7408,7 @@ async function saveAccountEditForSchool(accId,schoolId){
   const newPw=document.getElementById('eas-p').value.trim();
   if(newPw){
     all[i].password=await hashPassword(newPw);
+    all[i]._pwdChangedAt=new Date().toISOString();
     delete all[i]._mustChangePassword;
   }
   all[i].role=document.getElementById('eas-r').value;
@@ -8375,6 +8438,8 @@ function customPageDel(pageId,recId){
   if(!confirm('Delete this record? It can be restored from the Recycle Bin.'))return;
   const sid=getActiveSchoolId();
   const list=DB._raw_get(sid+'__custom_'+pageId)||[];
+  const removed=list.filter(r=>r.id===recId);
+  if(removed.length&&typeof recycleBinAdd==='function')recycleBinAdd('custom_'+pageId,removed);
   DB._raw_set(sid+'__custom_'+pageId,list.filter(r=>r.id!==recId));
   toast('Record deleted','danger');
   renderCustomPage(pageId);
@@ -8686,6 +8751,8 @@ function cmDelPage(schoolId,pageId){
   const p=getCustomPages(schoolId).find(x=>x.id===pageId);
   if(!p)return;
   if(!confirm('Delete custom page "'+p.name+'"?\n\nAll '+((DB._raw_get(schoolId+'__custom_'+pageId)||[]).length)+' record(s) will be lost. This cannot be undone.'))return;
+  const pageRecords=DB._raw_get(schoolId+'__custom_'+pageId)||[];
+  if(pageRecords.length&&typeof recycleBinAdd==='function')recycleBinAdd('custom_'+pageId,pageRecords);
   setCustomPages(schoolId,getCustomPages(schoolId).filter(x=>x.id!==pageId));
   DB._raw_set(schoolId+'__custom_'+pageId,null);
   logA('Deleted custom page: '+p.name);
