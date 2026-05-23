@@ -6538,10 +6538,15 @@ function recycleBinAdd(collectionKey,removedItems){
 (function installRecycleHook(){
   if(DB._recycleHooked)return;
   const origSet=DB.set.bind(DB);
+  const RECYCLE_TRACKED_KEYS=['accounts','academic_calendar','announcements','infraction_forms','visit_forms','schools','sessions'];
   DB.set=function(k,v){
-    if(Array.isArray(v)&&typeof SESSION_SCOPED_KEYS!=='undefined'&&SESSION_SCOPED_KEYS.includes(k)){
+    const isTracked=Array.isArray(v)&&(
+      (typeof SESSION_SCOPED_KEYS!=='undefined'&&SESSION_SCOPED_KEYS.includes(k))||
+      RECYCLE_TRACKED_KEYS.includes(k)
+    );
+    if(isTracked){
       try{
-        const prev=DB.get(k);
+        const prev=RECYCLE_TRACKED_KEYS.includes(k)?(DB._raw_get?DB._raw_get(k):null):DB.get(k);
         if(Array.isArray(prev)&&prev.length>v.length){
           const newIds=new Set(v.map(x=>x&&x.id).filter(Boolean));
           const removed=prev.filter(x=>x&&x.id&&!newIds.has(x.id));
