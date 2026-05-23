@@ -3537,9 +3537,12 @@ async function syncDownAll(){
 }
 
 // Push entire local DB up to Firebase (merge, not replace)
+// CRITICAL: For each array key, only upload if local has MORE items than Firebase.
+// This prevents a fresh device (with just-seeded defaults) from wiping
+// the full cloud dataset.
 async function syncUpAll(){
   if(!window.__FB)return;
-  const{db,ref,update}=window.__FB;
+  const{db,ref,update,get}=window.__FB;
   try{
     const data={};
     const rawGet=DB._raw_get||DB.get.bind(DB);
@@ -3553,9 +3556,34 @@ async function syncUpAll(){
         if(v!==null&&v!==undefined&&!(Array.isArray(v)&&v.length===0))data[k]=v;
       }
     }
-    if(Object.keys(data).length){
-      await update(ref(db,'data'),data);
-      console.log('[FB] Bulk upload complete ('+Object.keys(data).length+' keys)');
+    // SAFETY: for array-typed keys, check Firebase first — if FB has more entries
+    // than local, the local copy is stale (probably fresh-seeded). Skip the upload.
+    const safeData={};
+    for(const k of Object.keys(data)){
+      const localVal=data[k];
+      if(Array.isArray(localVal)){
+        try{
+          const snap=await get(ref(db,'data/'+k));
+          if(snap.exists()){
+            let fbVal=snap.val();
+            if(fbVal&&typeof fbVal==='object'&&!Array.isArray(fbVal)){
+              const ks=Object.keys(fbVal);
+              if(ks.length>0&&ks.every(kk=>/^\d+$/.test(kk))){
+                const arr=[];ks.sort((a,b)=>+a-+b).forEach(kk=>arr.push(fbVal[kk]));fbVal=arr;
+              }else fbVal=Object.values(fbVal);
+            }
+            if(Array.isArray(fbVal)&&fbVal.length>localVal.length){
+              console.log('[FB] Skip upload of "'+k+'" — local has '+localVal.length+' items, cloud has '+fbVal.length);
+              continue;
+            }
+          }
+        }catch(e){console.warn('[FB] Pre-upload check failed for '+k+':',e.message);}
+      }
+      safeData[k]=localVal;
+    }
+    if(Object.keys(safeData).length){
+      await update(ref(db,'data'),safeData);
+      console.log('[FB] Bulk upload complete ('+Object.keys(safeData).length+' keys)');
     }
   }catch(e){console.error('[FB] Bulk upload failed:',e);}
 }
