@@ -575,13 +575,37 @@ async function submitForcePassword(){
   const acc=DB.get('accounts')||[];
   const i=acc.findIndex(a=>a.id===CU.id);
   if(i<0)return;
-  acc[i].password=await hashPassword(nw);
-  acc[i]._pwdChangedAt=new Date().toISOString();
+  const newHash=await hashPassword(nw);
+  const newTs=new Date().toISOString();
+  acc[i].password=newHash;
+  acc[i]._pwdChangedAt=newTs;
   delete acc[i]._mustChangePassword;
   DB.set('accounts',acc);
   CU=acc[i];
+  // EXPLICIT Firebase upload with verification — guarantees the new password
+  // reaches the cloud before we let the user into the app
+  if(window.__FB&&window.__FB.db){
+    try{
+      const{db,ref,set,get}=window.__FB;
+      await set(ref(db,'data/accounts'),acc);
+      const snap=await get(ref(db,'data/accounts'));
+      const fbData=snap.val();
+      const fbArr=Array.isArray(fbData)?fbData:Object.values(fbData||{});
+      const fbMe=fbArr.find(a=>a&&a.id===CU.id);
+      if(!fbMe||fbMe.password!==newHash){
+        toast('⚠ Password sync to cloud failed — please try again','danger');
+        console.error('[FB] submitForcePassword verification FAILED');
+        return;
+      }
+      console.log('[FB] Forced password change verified in cloud');
+    }catch(e){
+      console.error('[FB] submitForcePassword upload failed:',e);
+      toast('⚠ Cloud sync error: '+e.message+' — please retry','danger');
+      return;
+    }
+  }
   saveLoginSession(CU);
-  toast('Password updated','success');
+  toast('Password set & synced ✓','success');
   launch();
 }
 function doLogout(){if(SAIMP){exitImp();return;}CU=null;clearLoginSession();if(window.__FB_AUTH&&window.__FB&&window.__FB.auth){try{window.__FB_AUTH.signOut(window.__FB.auth);}catch(e){}}document.getElementById('app').classList.add('hidden');document.getElementById('lp').classList.remove('hidden');}
@@ -3738,23 +3762,8 @@ async function bootFirebaseSync(){
   console.log('[FB] SDK loaded. Pulling initial data from cloud…');
   const hadData=await syncDownAll();
 
-  const localAccounts=JSON.parse(localStorage.getItem('sms7_accounts')||'[]');
-  const hasOnlyBackend=localAccounts.length===1&&localAccounts[0].role==='backend_admin';
-  const hasManyAccounts=localAccounts.length>2;
-
-  if(!hasOnlyBackend&&hasManyAccounts){
-    const schools=JSON.parse(localStorage.getItem('sms7_schools')||'[]');
-    if(!schools.length||schools.every(s=>s.id==='default_school')){
-      console.log('[FB] Detected stale Firebase data. Resetting to clean state.');
-      localStorage.removeItem('sms7_sv7');
-      localStorage.removeItem('sms7_accounts');
-      localStorage.removeItem('sms7_schools');
-      localStorage.removeItem('sms7_students');
-      localStorage.removeItem('sms7_teachers');
-      if(typeof seed==='function')seed();
-      await syncUpAll();
-    }
-  }
+  // DISABLED: the old "Detected stale Firebase data" auto-cleanup path
+  // was wiping cloud account list on every fresh device boot.
 
   SYNC_INITIAL_LOAD=true;
   SYNC_ENABLED=true;
