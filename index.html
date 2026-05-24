@@ -437,125 +437,121 @@ async function doLogin(){
   const p=document.getElementById('lp2').value.trim();
   if(!u||!p){toast('Please enter username and password','danger');return;}
 
-  if(typeof initSessions==='function'){try{initSessions();}catch(e){}}
-  if(typeof seed==='function'){try{seed();}catch(e){}}
-  if(typeof migrate==='function'){try{migrate();}catch(e){}}
-  if(typeof ensureAccountsExist==='function'){try{ensureAccountsExist();}catch(e){}}
-
-  // CRITICAL: wait for Firebase SDK to load if it hasn't yet — otherwise we'd
-  // log in against stale localStorage and never see password changes from
-  // other devices. Block up to 8s; if not ready, fall through to local-only.
   if(typeof waitForFirebase==='function'){
-    const fbReady=await waitForFirebase(8000);
-    if(!fbReady){console.warn('[Login] Firebase SDK not loaded after 8s — using local accounts only');}
+    const fbReady=await waitForFirebase(10000);
+    if(!fbReady){toast('Cannot connect to authentication server','danger');return;}
+  }
+  if(!window.__FB||!window.__FB.auth||!window.__FB_AUTH){
+    toast('Firebase Auth not available — please reload the page','danger');return;
   }
 
-  // Pull latest accounts from Firebase before checking credentials
-  if(window.__FB&&window.__FB.db){
-    try{
-      const fbPromise=window.__FB.get(window.__FB.ref(window.__FB.db,'data/accounts'));
-      const timeoutPromise=new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),3000));
-      const snap=await Promise.race([fbPromise,timeoutPromise]);
-      if(snap.exists()){
-        let fbAcc=snap.val();
-        if(fbAcc&&typeof fbAcc==='object'&&!Array.isArray(fbAcc)){
-          const ks=Object.keys(fbAcc);
-          if(ks.length>0&&ks.every(k=>/^\d+$/.test(k))){const a=[];ks.sort((x,y)=>+x-+y).forEach(k=>a.push(fbAcc[k]));fbAcc=a;}
-        }
-        if(Array.isArray(fbAcc)&&fbAcc.length>0){
-          const localAcc=JSON.parse(localStorage.getItem('sms7_accounts')||'[]');
-          const localBA=localAcc.find(a=>a.role==='backend_admin');
-          const fbBA=fbAcc.find(a=>a.role==='backend_admin');
-          if(localBA&&!fbBA){fbAcc.unshift(localBA);}
-          else if(localBA&&fbBA){
-            const localTs=localBA._pwdChangedAt||'';
-            const fbTs=fbBA._pwdChangedAt||'';
-            if(localTs>=fbTs){fbBA.password=localBA.password;fbBA._pwdChangedAt=localTs;}
-            if(localBA._mustChangePassword)fbBA._mustChangePassword=true;
-          }
-          window.__fbSyncPaused=true;
-          localStorage.setItem('sms7_accounts',JSON.stringify(fbAcc));
-          window.__fbSyncPaused=false;
+  // Pull fresh accounts list
+  let acc=[];
+  try{
+    const snap=await window.__FB.get(window.__FB.ref(window.__FB.db,'data/accounts'));
+    if(snap.exists()){
+      let fbAcc=snap.val();
+      if(fbAcc&&typeof fbAcc==='object'&&!Array.isArray(fbAcc)){
+        const ks=Object.keys(fbAcc);
+        if(ks.length>0&&ks.every(k=>/^\d+$/.test(k))){
+          const a=[];ks.sort((x,y)=>+x-+y).forEach(k=>a.push(fbAcc[k]));fbAcc=a;
         }
       }
-    }catch(e){console.warn('[FB] Could not fetch accounts (timeout or offline):',e);}
-  }
-
-  if(typeof ensureAccountsExist==='function'){try{ensureAccountsExist();}catch(e){}}
-  await new Promise(r=>setTimeout(r,50));
-
-  const acc=DB.get('accounts')||[];
-  if(!acc.length){
-    toast('Account database is empty — reloading...','danger');
-    try{localStorage.removeItem('sms7_sv7');}catch(e){}
-    setTimeout(()=>location.reload(),1500);
-    return;
-  }
-
-  // Try Firebase Auth first (server-side auth), then fall back to local hash
-  let user=null;
-  const fbAccount=acc.find(a=>a.username===u&&a.active);
-  if(fbAccount&&fbAccount.firebaseEmail&&window.__FB_AUTH){
-    try{
-      await window.__FB_AUTH.signIn(window.__FB.auth,fbAccount.firebaseEmail,p);
-      user=fbAccount;
-    }catch(e){
-      // Firebase Auth failed — try local hash fallback
-    }
-  }
-  if(!user){
-    const hashed=await hashPassword(p);
-    user=acc.find(a=>a.username===u&&a.active&&(a.password===hashed));
-    if(!user){
-      const fnvHash=hashPasswordSync(p);
-      user=acc.find(a=>a.username===u&&a.active&&a.password===fnvHash);
-      if(user){user.password=hashed;DB.set('accounts',acc);}
-    }
-    if(!user){
-      const legacy=acc.find(a=>a.username===u&&a.active&&a.password===p&&!a.password.match(/^[a-f0-9]{64}$/));
-      if(legacy){
-        legacy.password=hashed;
-        DB.set('accounts',acc);
-        user=legacy;
+      if(Array.isArray(fbAcc)){
+        acc=fbAcc;
+        window.__fbSyncPaused=true;
+        localStorage.setItem('sms7_accounts',JSON.stringify(fbAcc));
+        window.__fbSyncPaused=false;
+        console.log('[Login] Pulled '+fbAcc.length+' accounts from Firebase');
       }
     }
-  }
-  // GUARANTEED FALLBACK: If all hash checks failed, the stored hash may be corrupted
-  // by Firebase sync race conditions or async upgrade races. For accounts that still
-  // have _mustChangePassword (default password not yet changed), allow login with the
-  // known default password and fix the stored hash.
-  if(!user){
-    const knownDefaults=['admin123','staff@123','backend@admin'];
-    if(knownDefaults.includes(p)){
-      const candidate=acc.find(a=>a.username===u&&a.active&&a._mustChangePassword);
-      if(candidate){
-        const fixedHash=await hashPassword(p);
-        candidate.password=fixedHash;DB.set('accounts',acc);user=candidate;
-        console.log('[Login] Default-password fallback login for: '+u+' — stored hash was corrupted, now fixed.');
-      }
-    }
-  }
-  // Silently register Firebase Auth account for future logins
-  if(user&&!user.firebaseEmail&&window.__FB_AUTH){
-    const email=user.username+'@szm-school.app';
-    try{
-      await window.__FB_AUTH.createUser(window.__FB.auth,email,p);
-      const idx=acc.findIndex(a=>a.id===user.id);
-      if(idx>=0){acc[idx].firebaseEmail=email;DB.set('accounts',acc);user=acc[idx];}
-    }catch(e){/* ignore — may already exist or auth not enabled */}
-  }
-  if(!user){
+  }catch(e){console.error('[Login] Cloud fetch failed:',e);toast('Cannot reach cloud database','danger');return;}
+
+  if(!acc.length){toast('No accounts in database','danger');return;}
+
+  const account=acc.find(a=>a&&a.username===u&&a.active);
+  if(!account){
     _loginAttempts.count++;
     if(_loginAttempts.count>=5){_loginAttempts.lockUntil=Date.now()+30000;_loginAttempts.count=0;toast('Too many failed attempts. Locked for 30s','danger');}
     else{toast('Invalid credentials','danger');}
     return;
   }
-  // Mode enforcement: backend.html only allows backend_admin; client.html blocks backend_admin
-  if(window.SZM_MODE==='backend'&&user.role!=='backend_admin'){toast('This portal is for Backend Admin only. School staff should use the Client portal.','danger');return;}
-  if(window.SZM_MODE==='client'&&user.role==='backend_admin'){toast('Backend Admin cannot log in here. Use the Backend Admin portal.','danger');return;}
+
+  const email=account.firebaseEmail||(account.username+'@szm-school.app');
+
+  let signedIn=false;
+  let signInError=null;
+  try{
+    await window.__FB_AUTH.signIn(window.__FB.auth,email,p);
+    signedIn=true;
+    console.log('[Login] Firebase Auth sign-in succeeded for',u);
+  }catch(e){signInError=e;console.log('[Login] FB Auth sign-in failed:',e.code||e.message);}
+
+  // Auto-migrate users who don't have a Firebase Auth account yet
+  if(!signedIn&&signInError){
+    const errCode=signInError.code||'';
+    const userNotInFBAuth=errCode==='auth/user-not-found'||errCode==='auth/invalid-credential'||errCode==='auth/invalid-login-credentials';
+    if(userNotInFBAuth){
+      let pwOK=false;
+      if(account.password){
+        try{
+          const h1=await hashPassword(p);
+          const h2=typeof hashPasswordSync==='function'?hashPasswordSync(p):null;
+          if(account.password===h1||account.password===h2||account.password===p)pwOK=true;
+        }catch(e){}
+      }
+      const knownDefaults=['admin123','staff@123','backend@admin'];
+      if(knownDefaults.includes(p)&&account._mustChangePassword)pwOK=true;
+      if(!account.password&&p.length>=8)pwOK=true;
+
+      if(pwOK){
+        try{
+          await window.__FB_AUTH.createUser(window.__FB.auth,email,p);
+          const idx=acc.findIndex(a=>a.id===account.id);
+          if(idx>=0){
+            acc[idx].firebaseEmail=email;
+            DB.set('accounts',acc);
+            try{await window.__FB.set(window.__FB.ref(window.__FB.db,'data/accounts'),acc);}catch(e){}
+          }
+          signedIn=true;
+          console.log('[Login] Migrated user to Firebase Auth:',u);
+        }catch(createErr){console.error('[Login] Registration failed:',createErr);}
+      }
+    }
+  }
+
+  // Fallback: if Firebase Auth is not enabled (OPERATION_NOT_ALLOWED),
+  // accept local hash verification temporarily so the user is not locked out.
+  if(!signedIn&&signInError){
+    const errCode=signInError.code||'';
+    if(errCode==='auth/operation-not-allowed'||(signInError.message||'').includes('OPERATION_NOT_ALLOWED')){
+      console.warn('[Login] Firebase Auth Email/Password is DISABLED. Using local hash fallback. Enable it at: https://console.firebase.google.com/project/szm-admin-system/authentication/providers');
+      toast('⚠ Enable Firebase Auth Email/Password for cross-device sync','danger');
+      if(account.password){
+        try{
+          const h1=await hashPassword(p);
+          const h2=typeof hashPasswordSync==='function'?hashPasswordSync(p):null;
+          if(account.password===h1||account.password===h2||account.password===p)signedIn=true;
+        }catch(e){}
+      }
+      const knownDefaults=['admin123','staff@123','backend@admin'];
+      if(!signedIn&&knownDefaults.includes(p)&&account._mustChangePassword)signedIn=true;
+    }
+  }
+
+  if(!signedIn){
+    _loginAttempts.count++;
+    if(_loginAttempts.count>=5){_loginAttempts.lockUntil=Date.now()+30000;_loginAttempts.count=0;toast('Too many failed attempts. Locked for 30s','danger');}
+    else{toast('Invalid credentials','danger');}
+    return;
+  }
+
+  if(window.SZM_MODE==='backend'&&account.role!=='backend_admin'){toast('This portal is for Backend Admin only. School staff should use the Client portal.','danger');return;}
+  if(window.SZM_MODE==='client'&&account.role==='backend_admin'){toast('Backend Admin cannot log in here. Use the Backend Admin portal.','danger');return;}
+
   _loginAttempts.count=0;_loginAttempts.lockUntil=0;
-  CU=user;SAIMP=false;SAR=null;saveLoginSession(user);
-  if(user._mustChangePassword){
+  CU=account;SAIMP=false;SAR=null;saveLoginSession(account);
+  if(account._mustChangePassword){
     if(typeof showForcePasswordChange==='function'){showForcePasswordChange();return;}
   }
   launch();
@@ -573,40 +569,36 @@ async function submitForcePassword(){
   const cf=document.getElementById('fcp-conf').value;
   if(!nw||nw.length<8){toast('Password must be at least 8 characters','danger');return;}
   if(nw!==cf){toast('Passwords do not match','danger');return;}
+
+  if(!window.__FB||!window.__FB.auth||!window.__FB_AUTH){toast('Firebase Auth not available','danger');return;}
+  const fbUser=window.__FB.auth.currentUser;
+  if(!fbUser){toast('Not signed in — please log out and back in','danger');return;}
+
+  try{
+    const{updatePassword}=await import('https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js');
+    await updatePassword(fbUser,nw);
+  }catch(e){
+    console.error('[FB Auth] updatePassword failed:',e);
+    if(e.code==='auth/requires-recent-login'){
+      toast('Session expired — please sign out and back in, then change the password','danger');
+    }else{
+      toast('Failed: '+(e.message||e.code),'danger');
+    }
+    return;
+  }
+
   const acc=DB.get('accounts')||[];
   const i=acc.findIndex(a=>a.id===CU.id);
-  if(i<0)return;
-  const newHash=await hashPassword(nw);
-  const newTs=new Date().toISOString();
-  acc[i].password=newHash;
-  acc[i]._pwdChangedAt=newTs;
+  if(i<0){toast('Account not found in DB','danger');return;}
   delete acc[i]._mustChangePassword;
+  delete acc[i].password;
+  acc[i]._pwdChangedAt=new Date().toISOString();
   DB.set('accounts',acc);
   CU=acc[i];
-  // EXPLICIT Firebase upload with verification — guarantees the new password
-  // reaches the cloud before we let the user into the app
-  if(window.__FB&&window.__FB.db){
-    try{
-      const{db,ref,set,get}=window.__FB;
-      await set(ref(db,'data/accounts'),acc);
-      const snap=await get(ref(db,'data/accounts'));
-      const fbData=snap.val();
-      const fbArr=Array.isArray(fbData)?fbData:Object.values(fbData||{});
-      const fbMe=fbArr.find(a=>a&&a.id===CU.id);
-      if(!fbMe||fbMe.password!==newHash){
-        toast('⚠ Password sync to cloud failed — please try again','danger');
-        console.error('[FB] submitForcePassword verification FAILED');
-        return;
-      }
-      console.log('[FB] Forced password change verified in cloud');
-    }catch(e){
-      console.error('[FB] submitForcePassword upload failed:',e);
-      toast('⚠ Cloud sync error: '+e.message+' — please retry','danger');
-      return;
-    }
-  }
+  try{await window.__FB.set(window.__FB.ref(window.__FB.db,'data/accounts'),acc);}catch(e){}
+
   saveLoginSession(CU);
-  toast('Password set & synced ✓','success');
+  toast('Password updated ✓','success');
   launch();
 }
 function doLogout(){if(SAIMP){exitImp();return;}CU=null;clearLoginSession();if(window.__FB_AUTH&&window.__FB&&window.__FB.auth){try{window.__FB_AUTH.signOut(window.__FB.auth);}catch(e){}}document.getElementById('app').classList.add('hidden');document.getElementById('lp').classList.remove('hidden');}
@@ -898,9 +890,71 @@ function rProfile(){
   +'</table>'+(CU.role==='superadmin'?'<div class="dv"></div><div style="font-size:12px;font-weight:600;margin-bottom:8px">👁️ View as Staff Member</div><div class="fg" style="margin-bottom:6px"><select id="imps" style="width:100%;padding:9px 11px;background:var(--sf2);border:1px solid var(--bd);border-radius:var(--rs);color:var(--tx)"><option value="">— Select staff to view as —</option>'+(DB.get('accounts')||[]).filter(a=>a.role!=='superadmin'&&a.role!=='backend_admin'&&a.active).map(a=>'<option value="'+a.id+'">'+a.firstName+' '+a.lastName+' ('+rL(a.role)+')</option>').join('')+'</select></div><button class="btn bo bsm" onclick="impUser(document.getElementById(\'imps\').value)">👁️ Open Their Account →</button>':'')+'</div></div></div>';
 }
 function saveProf(){const fn=document.getElementById('pfn').value.trim(),ln=document.getElementById('pln').value.trim();if(!fn||!ln){toast('Name required','danger');return;}const acc=DB.get('accounts')||[];const i=acc.findIndex(a=>a.id===CU.id);if(i<0)return;const oldFullName=((acc[i].firstName||'')+' '+(acc[i].lastName||'')).trim().toLowerCase();acc[i].firstName=fn;acc[i].lastName=ln;acc[i].email=document.getElementById('pem').value.trim();acc[i].phone=document.getElementById('pph').value.trim();DB.set('accounts',acc);CU.firstName=fn;CU.lastName=ln;CU.email=acc[i].email;CU.phone=acc[i].phone;document.getElementById('sbun').textContent=fn+' '+ln;document.getElementById('sbav').textContent=((fn[0]||'')+(ln[0]||'')).toUpperCase();/* If teacher, also update the linked teacher record */if((CU._origRole||CU.role)==='teacher'){const teachers=DB.get('teachers')||[];const newFullName=(fn+' '+ln).trim();let tchIdx=teachers.findIndex(t=>((t.firstName||'')+' '+(t.lastName||'')).trim().toLowerCase()===oldFullName);if(tchIdx<0)tchIdx=teachers.findIndex(t=>(t.name||'').trim().toLowerCase()===oldFullName);/* Also handle subject input if present */const subjEl=document.getElementById('p-subject');if(tchIdx>=0){teachers[tchIdx].firstName=fn;teachers[tchIdx].lastName=ln;teachers[tchIdx].name=newFullName;teachers[tchIdx].phone=acc[i].phone;teachers[tchIdx].email=acc[i].email;if(subjEl)teachers[tchIdx].subject=subjEl.value.trim();DB.set('teachers',teachers);}else if(subjEl&&subjEl.value.trim()){/* No existing teacher record — create one */teachers.push({id:'tch'+Date.now(),name:newFullName,firstName:fn,lastName:ln,subject:subjEl.value.trim(),phone:acc[i].phone,email:acc[i].email,active:true,created:new Date().toISOString().split('T')[0]});DB.set('teachers',teachers);}}logA('Updated profile');toast(T('save_profile')+' ✓','success');rProfile();}
-async function chgPwd(){const cur=document.getElementById('pcur').value,nw=document.getElementById('pnw').value,cf=document.getElementById('pcf').value;if(!cur||!nw||!cf){toast('Fill all password fields','danger');return;}const acc=DB.get('accounts')||[];const i=acc.findIndex(a=>a.id===CU.id);if(i<0)return;const curHash=await hashPassword(cur);const curFnv=hashPasswordSync(cur);if(acc[i].password!==curHash&&acc[i].password!==curFnv&&acc[i].password!==cur){toast('Current password incorrect','danger');return;}if(nw.length<8){toast('Min 8 characters','danger');return;}if(nw!==cf){toast('Passwords do not match','danger');return;}acc[i].password=await hashPassword(nw);acc[i]._pwdChangedAt=new Date().toISOString();delete acc[i]._mustChangePassword;DB.set('accounts',acc);CU=acc[i];if(acc[i].firebaseEmail&&window.__FB_AUTH&&window.__FB&&window.__FB.auth){try{const fbUser=window.__FB.auth.currentUser;if(fbUser&&fbUser.email===acc[i].firebaseEmail){const{updatePassword}=await import('https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js');await updatePassword(fbUser,nw);}}catch(e){console.warn('[FB] Auth password update failed:',e);}}['pcur','pnw','pcf'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});logA('Changed password');toast(T('change_password')+' ✓','success');}
+async function chgPwd(){
+  const cur=document.getElementById('pcur').value;
+  const nw=document.getElementById('pnw').value;
+  const cf=document.getElementById('pcf').value;
+  if(!cur||!nw||!cf){toast('Fill all password fields','danger');return;}
+  if(nw.length<8){toast('Min 8 characters','danger');return;}
+  if(nw!==cf){toast('Passwords do not match','danger');return;}
+  if(!window.__FB||!window.__FB.auth||!window.__FB_AUTH){toast('Firebase Auth not available','danger');return;}
+  const account=(DB.get('accounts')||[]).find(a=>a.id===CU.id);
+  if(!account){toast('Account not found','danger');return;}
+  const email=account.firebaseEmail||(account.username+'@szm-school.app');
+  try{await window.__FB_AUTH.signIn(window.__FB.auth,email,cur);}
+  catch(e){toast('Current password incorrect','danger');return;}
+  try{
+    const fbUser=window.__FB.auth.currentUser;
+    const{updatePassword}=await import('https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js');
+    await updatePassword(fbUser,nw);
+  }catch(e){toast('Failed to update password: '+(e.message||e.code),'danger');return;}
+  const acc=DB.get('accounts')||[];
+  const i=acc.findIndex(a=>a.id===CU.id);
+  if(i>=0){
+    delete acc[i]._mustChangePassword;
+    delete acc[i].password;
+    acc[i]._pwdChangedAt=new Date().toISOString();
+    if(!acc[i].firebaseEmail)acc[i].firebaseEmail=email;
+    DB.set('accounts',acc);CU=acc[i];
+    try{await window.__FB.set(window.__FB.ref(window.__FB.db,'data/accounts'),acc);}catch(e){}
+  }
+  ['pcur','pnw','pcf'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
+  if(typeof logA==='function')logA('Changed password');
+  toast('Password changed ✓','success');
+}
 function quickChangePwdM(){openM('<div class="mh"><h3>🔑 '+T('change_password')+'</h3><button class="mc" onclick="closeM()">×</button></div><div class="mb2"><div class="fg"><label>'+T('current_password')+'</label><input id="qcur" type="password"></div><div class="fg"><label>'+T('new_password')+' (min 8 chars)</label><input id="qnw" type="password"></div><div class="fg"><label>'+T('confirm_password')+'</label><input id="qcf" type="password"></div></div><div class="mf"><button class="btn bg2" onclick="closeM()">'+T('cancel')+'</button><button class="btn bp" onclick="quickChgPwd()">'+T('change_password')+' →</button></div>');}
-async function quickChgPwd(){const cur=document.getElementById('qcur').value,nw=document.getElementById('qnw').value,cf=document.getElementById('qcf').value;if(!cur||!nw||!cf){toast('Fill all password fields','danger');return;}const acc=DB.get('accounts')||[];const i=acc.findIndex(a=>a.id===CU.id);if(i<0)return;const curHash=await hashPassword(cur);const curFnv=hashPasswordSync(cur);if(acc[i].password!==curHash&&acc[i].password!==curFnv&&acc[i].password!==cur){toast('Current password incorrect','danger');return;}if(nw.length<8){toast('Min 8 characters','danger');return;}if(nw!==cf){toast('Passwords do not match','danger');return;}acc[i].password=await hashPassword(nw);acc[i]._pwdChangedAt=new Date().toISOString();delete acc[i]._mustChangePassword;DB.set('accounts',acc);CU=acc[i];if(acc[i].firebaseEmail&&window.__FB_AUTH&&window.__FB&&window.__FB.auth){try{const fbUser=window.__FB.auth.currentUser;if(fbUser&&fbUser.email===acc[i].firebaseEmail){const{updatePassword}=await import('https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js');await updatePassword(fbUser,nw);}}catch(e){console.warn('[FB] Auth password update failed:',e);}}logA('Changed password');closeM();toast(T('change_password')+' ✓','success');}
+async function quickChgPwd(){
+  const cur=document.getElementById('qcur').value;
+  const nw=document.getElementById('qnw').value;
+  const cf=document.getElementById('qcf').value;
+  if(!cur||!nw||!cf){toast('Fill all password fields','danger');return;}
+  if(nw.length<8){toast('Min 8 characters','danger');return;}
+  if(nw!==cf){toast('Passwords do not match','danger');return;}
+  if(!window.__FB||!window.__FB.auth||!window.__FB_AUTH){toast('Firebase Auth not available','danger');return;}
+  const account=(DB.get('accounts')||[]).find(a=>a.id===CU.id);
+  if(!account){toast('Account not found','danger');return;}
+  const email=account.firebaseEmail||(account.username+'@szm-school.app');
+  try{await window.__FB_AUTH.signIn(window.__FB.auth,email,cur);}
+  catch(e){toast('Current password incorrect','danger');return;}
+  try{
+    const fbUser=window.__FB.auth.currentUser;
+    const{updatePassword}=await import('https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js');
+    await updatePassword(fbUser,nw);
+  }catch(e){toast('Failed to update password: '+(e.message||e.code),'danger');return;}
+  const acc=DB.get('accounts')||[];
+  const i=acc.findIndex(a=>a.id===CU.id);
+  if(i>=0){
+    delete acc[i]._mustChangePassword;
+    delete acc[i].password;
+    acc[i]._pwdChangedAt=new Date().toISOString();
+    if(!acc[i].firebaseEmail)acc[i].firebaseEmail=email;
+    DB.set('accounts',acc);CU=acc[i];
+    try{await window.__FB.set(window.__FB.ref(window.__FB.db,'data/accounts'),acc);}catch(e){}
+  }
+  if(typeof logA==='function')logA('Changed password');
+  closeM();
+  toast('Password changed ✓','success');
+}
 function resetStaffPwdM(id){const a=gA(id);if(!a)return;openM('<div class="mh"><h3>🔑 Reset Password: '+esc(a.firstName)+' '+esc(a.lastName)+'</h3><button class="mc" onclick="closeM()">×</button></div><div class="mb2"><div class="al ad">⚠️ This will set a new password for <strong>'+esc(a.firstName)+' '+esc(a.lastName)+'</strong> ('+rL(a.role)+'). They will need the new password to log in.</div><div class="fg"><label>New Password (min 8 chars)</label><input id="rsp" type="text" placeholder="Enter new password"></div></div><div class="mf"><button class="btn bg2" onclick="closeM()">'+T('cancel')+'</button><button class="btn bp" onclick="doResetStaffPwd(\''+id+'\')">Reset Password →</button></div>');}
 async function doResetStaffPwd(id){const np=document.getElementById('rsp').value.trim();if(!np||np.length<8){toast('Password must be at least 8 characters','danger');return;}const acc=DB.get('accounts')||[];const i=acc.findIndex(a=>a.id===id);if(i<0)return;acc[i].password=await hashPassword(np);acc[i]._pwdChangedAt=new Date().toISOString();delete acc[i]._mustChangePassword;DB.set('accounts',acc);logA('Reset password for: '+acc[i].firstName+' '+acc[i].lastName);closeM();toast('Password reset for '+acc[i].firstName+' '+acc[i].lastName,'success');rAccounts();}
 function setTheme(k){applyTheme(k);const acc=DB.get('accounts')||[];const i=acc.findIndex(a=>a.id===CU.id);if(i>=0){acc[i].theme=k;DB.set('accounts',acc);CU.theme=k;}document.getElementById('sbav').style.background=TH[k]?.a||'var(--ac)';toast('Theme: '+TH[k]?.n,'success');rProfile();}
