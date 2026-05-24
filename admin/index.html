@@ -8185,21 +8185,25 @@ const SCHOOL_DEFAULT_ACCOUNTS=[
   {role:'admin_assistant',username:'assistant',firstName:'Admin',lastName:'Assistant',theme:'rose'}
 ];
 
-function createDefaultAccountsForSchool(schoolId,schoolName){
+async function createDefaultAccountsForSchool(schoolId,schoolName){
   const all=DB._raw_get('accounts')||[];
   // Generate a short suffix to make usernames unique across schools
   const suffix='_'+schoolId.slice(-6).replace(/[^a-z0-9]/g,'');
   const created=[];
-  SCHOOL_DEFAULT_ACCOUNTS.forEach((tmpl,idx)=>{
+  for(let idx=0;idx<SCHOOL_DEFAULT_ACCOUNTS.length;idx++){
+    const tmpl=SCHOOL_DEFAULT_ACCOUNTS[idx];
     const username=schoolId==='default_school'
       ? (tmpl.username+(tmpl.scope?'_'+tmpl.scope.toLowerCase().replace(/[^a-z]/g,'').slice(0,3):''))
       : tmpl.username+suffix;
     // Skip if username already taken
-    if(all.some(a=>a.username===username))return;
+    if(all.some(a=>a.username===username))continue;
+    const defaultPw=tmpl.role==='superadmin'?'admin123':'staff@123';
+    const email=username+'@szm-school.app';
     const acc={
       id:'sa_'+schoolId.slice(-6)+'_'+idx+'_'+Date.now().toString(36),
       username,
-      password:tmpl.role==='superadmin'?'admin123':'staff@123',
+      firebaseEmail:email,
+      password:(typeof hashPasswordSync==='function')?hashPasswordSync(defaultPw):defaultPw,
       role:tmpl.role,
       firstName:tmpl.firstName,
       lastName:tmpl.lastName,
@@ -8209,12 +8213,34 @@ function createDefaultAccountsForSchool(schoolId,schoolName){
       theme:tmpl.theme||'blue',
       lang:'en',
       schoolId,
+      _mustChangePassword:true,
       created:new Date().toISOString().split('T')[0]
     };
     if(tmpl.scope)acc.scope=tmpl.scope;
+    // Register in Firebase Auth so the account is usable cross-device
+    if(window.__FB_AUTH&&window.__FB&&window.__FB.auth){
+      try{
+        await window.__FB_AUTH.createUser(window.__FB.auth,email,defaultPw);
+        console.log('[Multi-School] Registered in Firebase Auth: '+username);
+      }catch(e){
+        if(e.code!=='auth/email-already-in-use'){
+          console.warn('[Multi-School] FB Auth registration failed for '+username+':',e.code||e.message);
+        }
+      }
+    }
+    // Upgrade hash to SHA-256 asynchronously
+    if(typeof hashPassword==='function'){
+      hashPassword(defaultPw).then(h=>{
+        const ac2=DB._raw_get('accounts')||[];
+        const found=ac2.find(x=>x.id===acc.id);
+        if(found&&found.password&&found.password.startsWith&&found.password.startsWith('fnv1a_')){
+          found.password=h;DB._raw_set('accounts',ac2);
+        }
+      }).catch(()=>{});
+    }
     all.push(acc);
     created.push(acc);
-  });
+  }
   DB._raw_set('accounts',all);
   console.log('[Multi-School] Created '+created.length+' default accounts for school: '+schoolName);
   return created;
@@ -8225,7 +8251,7 @@ function createDefaultAccountsForSchool(schoolId,schoolName){
 (function(){
   if(typeof window.saveNewSchool!=='function')return;
   const origSave=window.saveNewSchool;
-  window.saveNewSchool=function(){
+  window.saveNewSchool=async function(){
     // Capture form values BEFORE the original closes the modal
     const nameInput=document.getElementById('sch-name');
     if(!nameInput)return;
@@ -8251,7 +8277,7 @@ function createDefaultAccountsForSchool(schoolId,schoolName){
     if(typeof initializeNewSchool==='function')initializeNewSchool(id,name);
     
     // Always create the FULL set of default accounts
-    const createdAccounts=createDefaultAccountsForSchool(id,name);
+    const createdAccounts=await createDefaultAccountsForSchool(id,name);
     
     // Default module toggles — all enabled
     DB._raw_set(id+'__module_toggles',getDefaultModuleToggles());
