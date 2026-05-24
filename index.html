@@ -515,7 +515,19 @@ async function doLogin(){
           }
           signedIn=true;
           console.log('[Login] Migrated user to Firebase Auth:',u);
-        }catch(createErr){console.error('[Login] Registration failed:',createErr);}
+        }catch(createErr){
+          // EMAIL_EXISTS means the FB Auth account exists but has a different password.
+          // The local hash matches the typed password, so we accept the login locally
+          // and trust the hash. The FB Auth password is out of date — but we can't reset
+          // it without knowing the current FB Auth password. User can change it via
+          // Change Password to bring them back in sync.
+          if(createErr.code==='auth/email-already-in-use'||(createErr.message||'').includes('EMAIL_EXISTS')){
+            console.warn('[Login] FB Auth account has a different password than the local hash. Accepting login via local hash. User should change password to re-sync.');
+            signedIn=true;
+          }else{
+            console.error('[Login] Registration failed:',createErr);
+          }
+        }
       }
     }
   }
