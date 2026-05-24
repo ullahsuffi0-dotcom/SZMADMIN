@@ -591,7 +591,7 @@ async function submitForcePassword(){
   const i=acc.findIndex(a=>a.id===CU.id);
   if(i<0){toast('Account not found in DB','danger');return;}
   delete acc[i]._mustChangePassword;
-  delete acc[i].password;
+  acc[i].password=await hashPassword(nw); // keep local hash as fallback for cached old clients
   acc[i]._pwdChangedAt=new Date().toISOString();
   DB.set('accounts',acc);
   CU=acc[i];
@@ -912,7 +912,7 @@ async function chgPwd(){
   const i=acc.findIndex(a=>a.id===CU.id);
   if(i>=0){
     delete acc[i]._mustChangePassword;
-    delete acc[i].password;
+    acc[i].password=await hashPassword(nw); // keep local hash as fallback for cached old clients
     acc[i]._pwdChangedAt=new Date().toISOString();
     if(!acc[i].firebaseEmail)acc[i].firebaseEmail=email;
     DB.set('accounts',acc);CU=acc[i];
@@ -945,7 +945,7 @@ async function quickChgPwd(){
   const i=acc.findIndex(a=>a.id===CU.id);
   if(i>=0){
     delete acc[i]._mustChangePassword;
-    delete acc[i].password;
+    acc[i].password=await hashPassword(nw); // keep local hash as fallback for cached old clients
     acc[i]._pwdChangedAt=new Date().toISOString();
     if(!acc[i].firebaseEmail)acc[i].firebaseEmail=email;
     DB.set('accounts',acc);CU=acc[i];
