@@ -3696,7 +3696,7 @@ async function syncUpAll(){
             let fbVal=snap.val();
             if(fbVal&&typeof fbVal==='object'&&!Array.isArray(fbVal)){
               const ks=Object.keys(fbVal);
-              if(ks.length>0&&ks.every(kk=>/^d+$/.test(kk))){
+              if(ks.length>0&&ks.every(kk=>/^\d+$/.test(kk))){
                 const arr=[];ks.sort((a,b)=>+a-+b).forEach(kk=>arr.push(fbVal[kk]));fbVal=arr;
               }else fbVal=Object.values(fbVal);
             }
@@ -3812,6 +3812,7 @@ async function bootFirebaseSync(){
   // Wait UP TO 30 seconds for Firebase (was 4s — caused silent local-only mode on slow networks)
   let ok=await waitForFirebase(30000);
   if(!ok){
+    // Keep trying in background — don't give up
     console.warn('[FB] Firebase SDK slow to load — will retry in background');
     updateSyncStatus(false);
     (async function retryBoot(){
@@ -3821,7 +3822,8 @@ async function bootFirebaseSync(){
     })();
     return;
   }
-  // ENABLE SYNC IMMEDIATELY — don't wait for initial sync-down to complete
+  // ENABLE SYNC IMMEDIATELY — don't wait for initial sync-down to complete.
+  // This ensures user writes get pushed to Firebase even if pulling fails.
   window.__SYNC_ON=true;
   SYNC_ENABLED=true;
   try{
@@ -4023,7 +4025,7 @@ function onPickedByChange(){
   }
 }
 
-function submitPickupRequest(){
+async function submitPickupRequest(){
   const sn=document.getElementById('pup-sn').value.trim();
   const gr=document.getElementById('pup-gr').value.trim();
   const gn=document.getElementById('pup-gn').value.trim();
@@ -4036,13 +4038,30 @@ function submitPickupRequest(){
   const time=document.getElementById('pup-time').value;
   const notes=document.getElementById('pup-notes').value.trim();
   if(!sn||!gn||!gp||!pickedBy||!reason||!time){alert('Please fill all required fields including who will pick up the student');return;}
-  // If "Other" is selected, the name field is required
   if(pickedBy!=='Father'&&pickedBy!=='Mother'&&!pickedByName){alert('Please enter the name of the person who will pick up the student');return;}
-  // Generate tracking number
   const trackNo='PU-'+Date.now().toString(36).toUpperCase().slice(-7);
-  const list=DB.get('early_pickups')||[];
   const id='pu'+Date.now();
-  list.push({id,trackNo,studentName:sn,grade:gr||'—',guardianName:gn,guardianPhone:gp,pickedBy,pickedByName:pickedByName||(pickedBy==='Father'||pickedBy==='Mother'?gn:''),pickedByPhone:pickedByPhone||(pickedBy==='Father'||pickedBy==='Mother'?gp:''),pickedById,reason,pickupTime:time,notes,status:'Pending',source:'parent_qr',submittedAt:new Date().toISOString(),created:new Date().toISOString()});
+  const newEntry={id,trackNo,studentName:sn,grade:gr||'—',guardianName:gn,guardianPhone:gp,pickedBy,pickedByName:pickedByName||(pickedBy==='Father'||pickedBy==='Mother'?gn:''),pickedByPhone:pickedByPhone||(pickedBy==='Father'||pickedBy==='Mother'?gp:''),pickedById,reason,pickupTime:time,notes,status:'Pending',source:'parent_qr',submittedAt:new Date().toISOString(),created:new Date().toISOString()};
+  // Pull latest from Firebase before appending to avoid overwriting existing records
+  const sid=window.__activeSessionId||(typeof getActiveSessionId==='function'?getActiveSessionId():'default');
+  const fbKey='early_pickups_'+sid;
+  let list=[];
+  if(window.__FB&&window.__FB.db){
+    try{
+      const{db,ref,get}=window.__FB;
+      const snap=await get(ref(db,'data/'+fbKey));
+      if(snap.exists()){
+        let v=snap.val();
+        if(v&&typeof v==='object'&&!Array.isArray(v)){
+          const ks=Object.keys(v);
+          if(ks.length>0&&ks.every(kk=>/^\d+$/.test(kk))){const arr=[];ks.sort((a,b)=>+a-+b).forEach(kk=>arr.push(v[kk]));v=arr;}
+          else v=Object.values(v);
+        }
+        if(Array.isArray(v))list=v;
+      }
+    }catch(e){list=DB.get('early_pickups')||[];}
+  }else{list=DB.get('early_pickups')||[];}
+  list.push(newEntry);
   DB.set('early_pickups',list);
   // Show success page
   const c=document.getElementById('pup-content');
@@ -6609,6 +6628,7 @@ const RECYCLE_TTL_DAYS=30;
 
 function recycleBinAdd(collectionKey,removedItems){
   if(!removedItems||!removedItems.length)return;
+  // Build new entries first
   const newEntries=removedItems.map((item,idx)=>({
     id:'rec'+Date.now()+'_'+idx+'_'+Math.random().toString(36).slice(2,7),
     collection:collectionKey,
@@ -6618,12 +6638,14 @@ function recycleBinAdd(collectionKey,removedItems){
     deletedById:CU?CU.id:null,
     schoolId:typeof getActiveSchoolId==='function'?getActiveSchoolId():'default_school'
   }));
+  // Apply locally first (fast UI feedback)
   const localBin=DB._raw_get('recycle_bin')||[];
   const localIds=new Set(localBin.map(e=>e.id));
   newEntries.forEach(e=>{if(!localIds.has(e.id))localBin.push(e);});
   const cutoff=new Date();cutoff.setDate(cutoff.getDate()-RECYCLE_TTL_DAYS);
   const localFiltered=localBin.filter(e=>new Date(e.deletedAt)>cutoff);
   DB._raw_set('recycle_bin',localFiltered);
+  // Then merge with Firebase (read-modify-write) to prevent losing entries from other devices
   if(window.__FB&&window.__FB.db){
     (async function(){
       try{
@@ -6635,6 +6657,7 @@ function recycleBinAdd(collectionKey,removedItems){
           if(ks.length>0&&ks.every(k=>/^\d+$/.test(k))){const a=[];ks.sort((x,y)=>+x-+y).forEach(k=>a.push(cloudBin[k]));cloudBin=a;}else cloudBin=Object.values(cloudBin);
         }
         if(!Array.isArray(cloudBin))cloudBin=[];
+        // Merge: union of cloud + local + new entries, dedupe by id
         const seen=new Set();
         const merged=[];
         [...cloudBin,...localBin,...newEntries].forEach(e=>{if(e&&e.id&&!seen.has(e.id)){seen.add(e.id);merged.push(e);}});

@@ -6,6 +6,9 @@
 <meta http-equiv="X-Content-Type-Options" content="nosniff">
 <meta http-equiv="X-Frame-Options" content="SAMEORIGIN">
 <meta name="referrer" content="strict-origin-when-cross-origin">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.gstatic.com https://*.firebaseio.com https://*.googleapis.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com data:; connect-src https: wss:; img-src 'self' data: blob:;">
 <title id="pg-title">SZM School Admin System</title>
 <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -201,6 +204,7 @@ html.parent-url #lp, html.parent-url #app, html.pickup-url #lp, html.pickup-url 
       <div class="fg"><label id="ll-p">Password</label><input id="lp2" type="password" autocomplete="off" placeholder="Enter your password"></div>
       <button class="btn bp" style="width:100%;justify-content:center;padding:11px" onclick="doLogin()" id="lbtn">Sign In →</button>
       <div id="mode-hint" style="text-align:center;margin-top:12px;font-size:11px;color:var(--tx3)"></div>
+      <div style="text-align:center;margin-top:8px;font-size:9px;color:var(--tx3);opacity:.5" id="ver-tag"></div>
     </div>
   </div>
 </div>
@@ -225,7 +229,7 @@ html.parent-url #lp, html.parent-url #app, html.pickup-url #lp, html.pickup-url 
         </div>
       </div>
       <nav class="snv" id="snav"></nav>
-      <div class="sft"><button class="lo" onclick="doLogout()" id="lbtxt">⬅ Sign Out</button></div>
+      <div class="sft"><button class="lo" onclick="quickChangePwdM()" id="cpbtn" style="margin-bottom:6px;opacity:.85">🔑 Change Password</button><button class="lo" onclick="doLogout()" id="lbtxt">⬅ Sign Out</button></div>
     </div>
     <div id="ma">
       <div id="tb">
@@ -248,6 +252,8 @@ html.parent-url #lp, html.parent-url #app, html.pickup-url #lp, html.pickup-url 
 </div>
 <script>
 'use strict';
+window.SZM_VERSION='2026.05.20a';
+console.log('[SZM] Version '+window.SZM_VERSION);
 // ─── SZM MODE DETECTION ─────────────────────────────────
 // Auto-detect mode: path ending with /admin or /admin/ → 'backend', everything else → 'client'
 (function(){
@@ -278,6 +284,7 @@ function isClientMode(){return window.SZM_MODE==='client'||window.SZM_MODE==='al
     var s=document.getElementById('lss');if(s)s.textContent='Staff Login';
     if(hint)hint.innerHTML='';
   }
+  var vt=document.getElementById('ver-tag');if(vt)vt.textContent='v'+window.SZM_VERSION;
 })();
 // ─── PASSWORD HASHING (SHA-256 via Web Crypto API) ───────
 async function hashPassword(plain){
@@ -337,6 +344,7 @@ window.__fbSyncPaused=false;
 const _origLSsetItem=localStorage.setItem.bind(localStorage);
 localStorage.setItem=function(k,v){
   _origLSsetItem(k,v);
+  // Sync as soon as Firebase is ready — don't wait for __SYNC_ON (which can fail silently)
   if(!k.startsWith('sms7_')||window.__fbSyncPaused||!window.__FB||!window.__FB.db)return;
   var key=k.substring(5);
   if(!window.__shouldSync||!window.__shouldSync(key))return;
@@ -344,7 +352,9 @@ localStorage.setItem=function(k,v){
   try{
     var parsed=JSON.parse(v);
     if(parsed===null||parsed===undefined)return;
-    set(ref(db,'data/'+key),parsed).then(function(){window.__lastSyncOk=Date.now();}).catch(function(e){console.warn('[FB] Write failed:'+key,e.message);});
+    set(ref(db,'data/'+key),parsed).then(function(){
+      window.__lastSyncOk=Date.now();
+    }).catch(function(e){console.warn('[FB] Write failed:'+key,e.message);});
   }catch(e){}
 };
 const RL={superadmin:{en:'Super Admin',ar:'مدير النظام'},principal:{en:'Principal',ar:'مدير المدرسة'},vice_principal:{en:'Vice Principal',ar:'وكيل المدرسة'},academic_supervisor:{en:'Academic Supervisor',ar:'المشرف الأكاديمي'},student_advisor:{en:'Student Advisor',ar:'المرشد الطلابي'},activity_incharge:{en:'Activity Incharge',ar:'مسؤول الأنشطة'},quality_supervisor:{en:'Quality Supervisor',ar:'مشرف الجودة'},quality_incharge:{en:'Quality Incharge',ar:'مسؤول الجودة'},admin_assistant:{en:'Admin Assistant',ar:'المساعد الإداري'},teacher:{en:'Teacher',ar:'معلم'}};
@@ -384,7 +394,7 @@ function seed(){
     defRoles.forEach(function(r){var a={id:r.id,username:r.username,password:hashPasswordSync(r.pw),role:r.role,firstName:r.firstName,lastName:r.lastName,email:'',phone:'',active:true,theme:r.theme,lang:'en',schoolId:'default_school',created:'2024-01-01',_mustChangePassword:true};if(r.scope)a.scope=r.scope;seedAccounts.push(a);});
   }
   DB.set('accounts',seedAccounts);
-  hashPassword('backend@admin').then(h=>{const ac=DB.get('accounts')||[];const ba=ac.find(a=>a.id==='backend1');if(ba){ba.password=h;DB.set('accounts',ac);}});
+  hashPassword('backend@admin').then(h=>{const ac=DB.get('accounts')||[];const ba=ac.find(a=>a.id==='backend1');if(ba&&ba.password.startsWith('fnv1a_')){ba.password=h;DB.set('accounts',ac);}});
   if(isClientMode()){var pwList=[{id:'def_sa',pw:'admin123'}];['def_pr','def_v1','def_v2','def_ac','def_ad','def_qs','def_qi','def_ai','def_aa'].forEach(function(i){pwList.push({id:i,pw:'staff@123'});});pwList.forEach(function(p){hashPassword(p.pw).then(function(h){var ac2=DB.get('accounts')||[];var found=ac2.find(function(a){return a.id===p.id;});if(found&&found.password.startsWith('fnv1a_')){found.password=h;DB.set('accounts',ac2);}});});}
   DB.set('students',[]);
   ['complaints','tasks','infractions','referrals','class_visits','notebook_checks','activities','early_pickups','exam_absents','task_requests','discipline_reports','infraction_forms','visit_forms','activity_reports','attendance','student_health','remedial_plans','vp_reports','warning_letters','teacher_achievements','reexam_schedules'].forEach(k=>DB.set(k,[]));
@@ -721,7 +731,7 @@ function toast(msg,type='info'){const el=document.createElement('div');el.classN
 function openM(html,lg=false){document.getElementById('mr').innerHTML='<div class="mb" onclick="if(event.target===this)closeM()"><div class="mo'+(lg?' ml':'')+'">'+html+'</div></div>';}
 function closeM(){document.getElementById('mr').innerHTML='';}
 function nid(p){return p+Date.now()+Math.random().toString(36).slice(2,5);}
-function logA(action){const l=DB.get('activity_log')||[];l.unshift({user:CU.firstName+' '+CU.lastName,role:rL(CU.role),roleKey:CU.role,action,time:new Date().toISOString()});if(l.length>300)l.pop();DB.set('activity_log',l);}
+function logA(action){if(!CU)return;const l=DB.get('activity_log')||[];l.unshift({user:CU.firstName+' '+CU.lastName,role:rL(CU.role),roleKey:CU.role,action,time:new Date().toISOString()});if(l.length>300)l.pop();DB.set('activity_log',l);}
 function fN(s){return((s.firstName||'')+' '+(s.lastName||'')).trim();}
 function gS(id){return(DB.get('students')||[]).find(s=>s.id===id);}
 function gA(id){return(DB.get('accounts')||[]).find(a=>a.id===id);}
@@ -924,6 +934,41 @@ async function chgPwd(){
   if(typeof logA==='function')logA('Changed password');
   toast('Password changed ✓','success');
 }
+function quickChangePwdM(){openM('<div class="mh"><h3>🔑 '+T('change_password')+'</h3><button class="mc" onclick="closeM()">×</button></div><div class="mb2"><div class="fg"><label>'+T('current_password')+'</label><input id="qcur" type="password"></div><div class="fg"><label>'+T('new_password')+' (min 8 chars)</label><input id="qnw" type="password"></div><div class="fg"><label>'+T('confirm_password')+'</label><input id="qcf" type="password"></div></div><div class="mf"><button class="btn bg2" onclick="closeM()">'+T('cancel')+'</button><button class="btn bp" onclick="quickChgPwd()">'+T('change_password')+' →</button></div>');}
+async function quickChgPwd(){
+  const cur=document.getElementById('qcur').value;
+  const nw=document.getElementById('qnw').value;
+  const cf=document.getElementById('qcf').value;
+  if(!cur||!nw||!cf){toast('Fill all password fields','danger');return;}
+  if(nw.length<8){toast('Min 8 characters','danger');return;}
+  if(nw!==cf){toast('Passwords do not match','danger');return;}
+  if(!window.__FB||!window.__FB.auth||!window.__FB_AUTH){toast('Firebase Auth not available','danger');return;}
+  const account=(DB.get('accounts')||[]).find(a=>a.id===CU.id);
+  if(!account){toast('Account not found','danger');return;}
+  const email=account.firebaseEmail||(account.username+'@szm-school.app');
+  try{await window.__FB_AUTH.signIn(window.__FB.auth,email,cur);}
+  catch(e){toast('Current password incorrect','danger');return;}
+  try{
+    const fbUser=window.__FB.auth.currentUser;
+    const{updatePassword}=await import('https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js');
+    await updatePassword(fbUser,nw);
+  }catch(e){toast('Failed to update password: '+(e.message||e.code),'danger');return;}
+  const acc=DB.get('accounts')||[];
+  const i=acc.findIndex(a=>a.id===CU.id);
+  if(i>=0){
+    delete acc[i]._mustChangePassword;
+    acc[i].password=await hashPassword(nw); // keep local hash as fallback for cached old clients
+    acc[i]._pwdChangedAt=new Date().toISOString();
+    if(!acc[i].firebaseEmail)acc[i].firebaseEmail=email;
+    DB.set('accounts',acc);CU=acc[i];
+    try{await window.__FB.set(window.__FB.ref(window.__FB.db,'data/accounts'),acc);}catch(e){}
+  }
+  if(typeof logA==='function')logA('Changed password');
+  closeM();
+  toast('Password changed ✓','success');
+}
+function resetStaffPwdM(id){const a=gA(id);if(!a)return;openM('<div class="mh"><h3>🔑 Reset Password: '+esc(a.firstName)+' '+esc(a.lastName)+'</h3><button class="mc" onclick="closeM()">×</button></div><div class="mb2"><div class="al ad">⚠️ This will set a new password for <strong>'+esc(a.firstName)+' '+esc(a.lastName)+'</strong> ('+rL(a.role)+'). They will need the new password to log in.</div><div class="fg"><label>New Password (min 8 chars)</label><input id="rsp" type="text" placeholder="Enter new password"></div></div><div class="mf"><button class="btn bg2" onclick="closeM()">'+T('cancel')+'</button><button class="btn bp" onclick="doResetStaffPwd(\''+id+'\')">Reset Password →</button></div>');}
+async function doResetStaffPwd(id){const np=document.getElementById('rsp').value.trim();if(!np||np.length<8){toast('Password must be at least 8 characters','danger');return;}const acc=DB.get('accounts')||[];const i=acc.findIndex(a=>a.id===id);if(i<0)return;acc[i].password=await hashPassword(np);acc[i]._pwdChangedAt=new Date().toISOString();delete acc[i]._mustChangePassword;DB.set('accounts',acc);logA('Reset password for: '+acc[i].firstName+' '+acc[i].lastName);closeM();toast('Password reset for '+acc[i].firstName+' '+acc[i].lastName,'success');rAccounts();}
 function setTheme(k){applyTheme(k);const acc=DB.get('accounts')||[];const i=acc.findIndex(a=>a.id===CU.id);if(i>=0){acc[i].theme=k;DB.set('accounts',acc);CU.theme=k;}document.getElementById('sbav').style.background=TH[k]?.a||'var(--ac)';toast('Theme: '+TH[k]?.n,'success');rProfile();}
 function rCalendar(){
   const evts=(DB.get('academic_calendar')||[]).sort((a,b)=>a.date.localeCompare(b.date));const isSA=CU.role==='superadmin';const today=new Date();today.setHours(0,0,0,0);
@@ -937,17 +982,22 @@ function rAccounts(){
   // Super Admin and other school staff must NEVER see the Backend Admin account
   const acc=CU.role==='backend_admin'?allAcc:allAcc.filter(a=>a.role!=='backend_admin');
   const isSA=CU.role==='superadmin'||CU.role==='backend_admin';
-  document.getElementById('pc').innerHTML='<div class="card"><div class="sh2"><h3>'+T('accounts')+' ('+acc.length+')</h3><button class="btn bp bsm" onclick="addAccM()">+</button></div><div class="tw"><table><thead><tr><th>'+T('name')+'</th><th>Username</th><th>'+T('role')+'</th><th>'+T('email')+'</th><th>'+T('phone')+'</th><th>'+T('status')+'</th>'+(isSA?'<th>Created</th>':'')+'<th>Actions</th></tr></thead><tbody>'+acc.map(a=>'<tr><td><strong>'+a.firstName+' '+a.lastName+'</strong></td><td><code>'+a.username+'</code></td><td><span class="badge bbl">'+rL(a.role)+'</span></td><td style="font-size:11px;color:var(--tx3)">'+(a.email||'—')+'</td><td class="mono" style="font-size:11px;color:var(--tx3)">'+(a.phone||'—')+'</td><td><span class="badge '+(a.active?'bgn':'bgr')+'">'+T(a.active?'active':'inactive')+'</span></td>'+(isSA?'<td class="mono" style="font-size:11px;color:var(--tx3)">'+(a.created||'—')+'</td>':'')+'<td style="display:flex;gap:4px"><button class="btn bg2 bxs" onclick="editAccM(\''+a.id+'\')">'+T('edit')+'</button>'+(a.id!==CU.id?'<button class="btn bg2 bxs" onclick="togAcc(\''+a.id+'\')">'+(a.active?'Disable':'Enable')+'</button>':'')+(CU.role==='superadmin'&&a.role!=='superadmin'?'<button class="btn bg2 bxs" onclick="impUser(\''+a.id+'\')">👁️</button>':'')+'</td></tr>').join('')+'</tbody></table></div></div>';
+  document.getElementById('pc').innerHTML='<div class="card"><div class="sh2"><h3>'+T('accounts')+' ('+acc.length+')</h3><button class="btn bp bsm" onclick="addAccM()">+</button></div><div class="tw"><table><thead><tr><th>'+T('name')+'</th><th>Username</th><th>'+T('role')+'</th><th>'+T('email')+'</th><th>'+T('phone')+'</th><th>'+T('status')+'</th>'+(isSA?'<th>Created</th>':'')+'<th>Actions</th></tr></thead><tbody>'+acc.map(a=>'<tr><td><strong>'+a.firstName+' '+a.lastName+'</strong></td><td><code>'+a.username+'</code></td><td><span class="badge bbl">'+rL(a.role)+'</span></td><td style="font-size:11px;color:var(--tx3)">'+(a.email||'—')+'</td><td class="mono" style="font-size:11px;color:var(--tx3)">'+(a.phone||'—')+'</td><td><span class="badge '+(a.active?'bgn':'bgr')+'">'+T(a.active?'active':'inactive')+'</span></td>'+(isSA?'<td class="mono" style="font-size:11px;color:var(--tx3)">'+(a.created||'—')+'</td>':'')+'<td style="display:flex;gap:4px"><button class="btn bg2 bxs" onclick="editAccM(\''+a.id+'\')">'+T('edit')+'</button>'+(isSA&&a.id!==CU.id?'<button class="btn bg2 bxs" onclick="resetStaffPwdM(\''+a.id+'\')" title="Reset Password">🔑</button>':'')+(a.id!==CU.id?'<button class="btn bg2 bxs" onclick="togAcc(\''+a.id+'\')">'+(a.active?'Disable':'Enable')+'</button>':'')+(CU.role==='superadmin'&&a.role!=='superadmin'?'<button class="btn bg2 bxs" onclick="impUser(\''+a.id+'\')">👁️</button>':'')+'</td></tr>').join('')+'</tbody></table></div></div>';
 }
 function addAccM(){openM('<div class="mh"><h3>+ '+T('accounts')+'</h3><button class="mc" onclick="closeM()">×</button></div><div class="mb2"><div class="fr f2"><div class="fg"><label>'+T('first_name')+' *</label><input id="nafn"></div><div class="fg"><label>'+T('last_name')+' *</label><input id="naln"></div></div><div class="fr f2"><div class="fg"><label>'+T('email')+'</label><input id="naem" type="email"></div><div class="fg"><label>'+T('phone')+'</label><input id="naph"></div></div><div class="fr f2"><div class="fg"><label>Username *</label><input id="naun"></div><div class="fg"><label>Password *</label><input id="napw" type="password"></div></div><div class="fg"><label>'+T('role')+' *</label><select id="narl"><option value="">— Select —</option>'+Object.entries(RL).filter(([k])=>k!=='superadmin'&&k!=='backend_admin').map(([k,v])=>'<option value="'+k+'">'+v.en+'</option>').join('')+'</select></div></div><div class="mf"><button class="btn bg2" onclick="closeM()">'+T('cancel')+'</button><button class="btn bp" onclick="saveAcc()">Create →</button></div>');}
 async function saveAcc(){const fn=document.getElementById('nafn').value.trim(),ln=document.getElementById('naln').value.trim(),un=document.getElementById('naun').value.trim().toLowerCase().replace(/\s/g,''),pw=document.getElementById('napw').value,rl=document.getElementById('narl').value;if(!fn||!ln||!un||!pw||!rl){toast('Fill required fields','danger');return;}if(pw.length<8){toast('Password min 8 chars','danger');return;}const acc=DB.get('accounts')||[];if(acc.find(a=>a.username===un)){toast('Username exists','danger');return;}acc.push({id:'u'+Date.now(),username:un,password:await hashPassword(pw),role:rl,firstName:fn,lastName:ln,email:document.getElementById('naem').value.trim(),phone:document.getElementById('naph').value.trim(),active:true,theme:'blue',lang:'en',created:new Date().toISOString().split('T')[0]});DB.set('accounts',acc);logA('Created account: '+fn+' '+ln);closeM();toast('Account created','success');rAccounts();}
 function editAccM(id){const a=gA(id);if(!a)return;
   if(a.role==='backend_admin'&&CU.role!=='backend_admin'){toast('Access denied','danger');return;}
+  if(a.role==='backend_admin'){
+    openM('<div class="mh"><h3>✏️ Update Backend Admin Password</h3><button class="mc" onclick="closeM()">×</button></div><div class="mb2"><div class="al ai">Only password can be changed for the Backend Admin account.</div><div class="fg"><label>New Password (blank=keep)</label><input id="eapw" type="password"></div></div><div class="mf"><button class="btn bg2" onclick="closeM()">'+T('cancel')+'</button><button class="btn bp" onclick="saveEditAcc(\''+id+'\')">'+T('save')+' →</button></div>');
+    return;
+  }
   openM('<div class="mh"><h3>Edit: '+a.firstName+' '+a.lastName+'</h3><button class="mc" onclick="closeM()">×</button></div><div class="mb2"><div class="fr f2"><div class="fg"><label>'+T('first_name')+'</label><input id="eafn" value="'+esc(a.firstName)+'"></div><div class="fg"><label>'+T('last_name')+'</label><input id="ealn" value="'+esc(a.lastName)+'"></div></div><div class="fr f2"><div class="fg"><label>'+T('email')+'</label><input id="eaem" value="'+esc(a.email||'')+'"></div><div class="fg"><label>'+T('phone')+'</label><input id="raph" value="'+esc(a.phone||'')+'"></div></div><div class="fg"><label>'+T('role')+'</label><select id="earl">'+Object.entries(RL).filter(([k])=>k!=='superadmin'&&k!=='backend_admin').map(([k,v])=>'<option value="'+k+'"'+(a.role===k?' selected':'')+'>'+v.en+'</option>').join('')+'</select></div><div class="fg"><label>New Password (blank=keep)</label><input id="eapw" type="password"></div></div><div class="mf"><button class="btn bg2" onclick="closeM()">'+T('cancel')+'</button><button class="btn bp" onclick="saveEditAcc(\''+id+'\')">'+T('save')+' →</button></div>');}
 function saveEditAcc(id){const acc=DB.get('accounts')||[];const i=acc.findIndex(a=>a.id===id);if(i<0)return;
-  // Protect backend admin account from being modified by anyone except backend admin
   if(acc[i].role==='backend_admin'&&CU.role!=='backend_admin'){toast('Cannot modify Backend Admin account','danger');closeM();return;}
-  acc[i].firstName=document.getElementById('eafn').value.trim()||acc[i].firstName;acc[i].lastName=document.getElementById('ealn').value.trim()||acc[i].lastName;acc[i].email=document.getElementById('eaem').value.trim();acc[i].phone=document.getElementById('raph').value.trim();acc[i].role=document.getElementById('earl').value;const np=document.getElementById('eapw').value;if(np&&np.length>=8){acc[i].password=hashPasswordSync(np);acc[i]._pwPending=np;}DB.set('accounts',acc);if(np&&np.length>=8){hashPassword(np).then(h=>{const ac2=DB.get('accounts')||[];const j=ac2.findIndex(a=>a.id===acc[i].id);if(j>=0){ac2[j].password=h;delete ac2[j]._pwPending;DB.set('accounts',ac2);}});}logA('Edited account: '+acc[i].firstName+' '+acc[i].lastName);closeM();toast('Updated','success');rAccounts();}
+  const isBA=acc[i].role==='backend_admin';
+  if(!isBA){acc[i].firstName=document.getElementById('eafn').value.trim()||acc[i].firstName;acc[i].lastName=document.getElementById('ealn').value.trim()||acc[i].lastName;acc[i].email=document.getElementById('eaem').value.trim();acc[i].phone=document.getElementById('raph').value.trim();acc[i].role=document.getElementById('earl').value;}
+  const np=document.getElementById('eapw').value;if(np&&np.length>=8){acc[i].password=hashPasswordSync(np);acc[i]._pwPending=np;}DB.set('accounts',acc);if(np&&np.length>=8){hashPassword(np).then(h=>{const ac2=DB.get('accounts')||[];const j=ac2.findIndex(a=>a.id===acc[i].id);if(j>=0){ac2[j].password=h;delete ac2[j]._pwPending;DB.set('accounts',ac2);}});}logA(isBA?'Updated Backend Admin password':'Edited account: '+acc[i].firstName+' '+acc[i].lastName);closeM();toast('Updated','success');rAccounts();}
 function togAcc(id){if(id===CU.id){toast("Can't disable own account",'danger');return;}const acc=DB.get('accounts')||[];const i=acc.findIndex(a=>a.id===id);if(i<0)return;
   if(acc[i].role==='backend_admin'&&CU.role!=='backend_admin'){toast('Cannot disable Backend Admin','danger');return;}
   acc[i].active=!acc[i].active;DB.set('accounts',acc);toast('Account '+(acc[i].active?'enabled':'disabled'));rAccounts();}
@@ -3582,6 +3632,24 @@ async function syncDownAll(){
               const arr=[];keys.sort((a,b)=>+a-+b).forEach(kk=>arr.push(v[kk]));v=arr;
             }
           }
+          // Merge backend_admin — keep the NEWER password (by _pwdChangedAt timestamp)
+          if(k==='accounts'&&Array.isArray(v)){
+            try{
+              const localAcc=JSON.parse(localStorage.getItem('sms7_accounts')||'[]');
+              const localBA=localAcc.find(a=>a&&a.role==='backend_admin');
+              const fbBA=v.find(a=>a&&a.role==='backend_admin');
+              if(localBA&&!fbBA){v.unshift(localBA);}
+              else if(localBA&&fbBA){
+                const localTs=localBA._pwdChangedAt||'';
+                const fbTs=fbBA._pwdChangedAt||'';
+                if(localTs>fbTs){
+                  fbBA.password=localBA.password;
+                  fbBA._pwdChangedAt=localTs;
+                }
+                if(localBA._mustChangePassword&&!fbBA._mustChangePassword&&localTs>=fbTs)fbBA._mustChangePassword=true;
+              }
+            }catch(e){}
+          }
           window.__fbSyncPaused=true;
           localStorage.setItem('sms7_'+k,JSON.stringify(v));
           window.__fbSyncPaused=false;
@@ -3682,6 +3750,20 @@ function subscribeToCollection(k){
         const arr=[];keys.sort((a,b)=>+a-+b).forEach(kk=>arr.push(v[kk]));v=arr;
       }
     }
+    // Merge backend_admin during real-time account syncs — keep the NEWER password
+    if(k==='accounts'&&Array.isArray(v)){
+      try{
+        const curAcc=JSON.parse(localStorage.getItem('sms7_accounts')||'[]');
+        const curBA=curAcc.find(a=>a&&a.role==='backend_admin');
+        const incBA=v.find(a=>a&&a.role==='backend_admin');
+        if(curBA&&!incBA){v.unshift(curBA);}
+        else if(curBA&&incBA){
+          const localTs=curBA._pwdChangedAt||'';
+          const remoteTs=incBA._pwdChangedAt||'';
+          if(localTs>remoteTs){incBA.password=curBA.password;incBA._pwdChangedAt=localTs;}
+        }
+      }catch(e){}
+    }
     window.__fbSyncPaused=true;
     localStorage.setItem('sms7_'+k,JSON.stringify(v));
     window.__fbSyncPaused=false;
@@ -3726,9 +3808,11 @@ async function bootFirebaseSync(){
   // CRITICAL: Always run seed FIRST so we have a clean starting state.
   // Seed is idempotent (checks sv7 flag) — won't overwrite if already done.
   if(!window.__seedDone){try{window.__doSeedAndStart();}catch(e){console.warn('[FB] Seed error:',e);}window.__seedDone=true;}
-  
+
+  // Wait UP TO 30 seconds for Firebase (was 4s — caused silent local-only mode on slow networks)
   let ok=await waitForFirebase(30000);
   if(!ok){
+    // Keep trying in background — don't give up
     console.warn('[FB] Firebase SDK slow to load — will retry in background');
     updateSyncStatus(false);
     (async function retryBoot(){
@@ -3738,6 +3822,8 @@ async function bootFirebaseSync(){
     })();
     return;
   }
+  // ENABLE SYNC IMMEDIATELY — don't wait for initial sync-down to complete.
+  // This ensures user writes get pushed to Firebase even if pulling fails.
   window.__SYNC_ON=true;
   SYNC_ENABLED=true;
   try{
@@ -3939,7 +4025,7 @@ function onPickedByChange(){
   }
 }
 
-function submitPickupRequest(){
+async function submitPickupRequest(){
   const sn=document.getElementById('pup-sn').value.trim();
   const gr=document.getElementById('pup-gr').value.trim();
   const gn=document.getElementById('pup-gn').value.trim();
@@ -3952,13 +4038,30 @@ function submitPickupRequest(){
   const time=document.getElementById('pup-time').value;
   const notes=document.getElementById('pup-notes').value.trim();
   if(!sn||!gn||!gp||!pickedBy||!reason||!time){alert('Please fill all required fields including who will pick up the student');return;}
-  // If "Other" is selected, the name field is required
   if(pickedBy!=='Father'&&pickedBy!=='Mother'&&!pickedByName){alert('Please enter the name of the person who will pick up the student');return;}
-  // Generate tracking number
   const trackNo='PU-'+Date.now().toString(36).toUpperCase().slice(-7);
-  const list=DB.get('early_pickups')||[];
   const id='pu'+Date.now();
-  list.push({id,trackNo,studentName:sn,grade:gr||'—',guardianName:gn,guardianPhone:gp,pickedBy,pickedByName:pickedByName||(pickedBy==='Father'||pickedBy==='Mother'?gn:''),pickedByPhone:pickedByPhone||(pickedBy==='Father'||pickedBy==='Mother'?gp:''),pickedById,reason,pickupTime:time,notes,status:'Pending',source:'parent_qr',submittedAt:new Date().toISOString(),created:new Date().toISOString()});
+  const newEntry={id,trackNo,studentName:sn,grade:gr||'—',guardianName:gn,guardianPhone:gp,pickedBy,pickedByName:pickedByName||(pickedBy==='Father'||pickedBy==='Mother'?gn:''),pickedByPhone:pickedByPhone||(pickedBy==='Father'||pickedBy==='Mother'?gp:''),pickedById,reason,pickupTime:time,notes,status:'Pending',source:'parent_qr',submittedAt:new Date().toISOString(),created:new Date().toISOString()};
+  // Pull latest from Firebase before appending to avoid overwriting existing records
+  const sid=window.__activeSessionId||(typeof getActiveSessionId==='function'?getActiveSessionId():'default');
+  const fbKey='early_pickups_'+sid;
+  let list=[];
+  if(window.__FB&&window.__FB.db){
+    try{
+      const{db,ref,get}=window.__FB;
+      const snap=await get(ref(db,'data/'+fbKey));
+      if(snap.exists()){
+        let v=snap.val();
+        if(v&&typeof v==='object'&&!Array.isArray(v)){
+          const ks=Object.keys(v);
+          if(ks.length>0&&ks.every(kk=>/^\d+$/.test(kk))){const arr=[];ks.sort((a,b)=>+a-+b).forEach(kk=>arr.push(v[kk]));v=arr;}
+          else v=Object.values(v);
+        }
+        if(Array.isArray(v))list=v;
+      }
+    }catch(e){list=DB.get('early_pickups')||[];}
+  }else{list=DB.get('early_pickups')||[];}
+  list.push(newEntry);
   DB.set('early_pickups',list);
   // Show success page
   const c=document.getElementById('pup-content');
@@ -4594,6 +4697,8 @@ function getAllSessions(){
 
 // Initialize sessions on first run
 function initSessions(){
+  const _rGet=DB._raw_get||function(k){try{return JSON.parse(localStorage.getItem('sms7_'+k)||'null')}catch(e){return null}};
+  const _rSet=DB._raw_set||function(k,v){try{localStorage.setItem('sms7_'+k,JSON.stringify(v))}catch(e){}};
   const sessions=getAllSessions();
   if(!sessions.length){
     // Create a default session and migrate existing data
@@ -4609,21 +4714,21 @@ function initSessions(){
       createdBy:'system',
       isActive:true
     };
-    DB._raw_set('sessions',[defaultSession]);
+    _rSet('sessions',[defaultSession]);
     setActiveSessionId('default');
     // Migrate any pre-existing flat data into the default session bucket
     SESSION_SCOPED_KEYS.forEach(k=>{
-      const flat=DB._raw_get(k);
+      const flat=_rGet(k);
       if(flat&&Array.isArray(flat)&&flat.length){
-        const bucketed=DB._raw_get(k+'_default');
+        const bucketed=_rGet(k+'_default');
         if(!bucketed||!bucketed.length){
-          DB._raw_set(k+'_default',flat);
+          _rSet(k+'_default',flat);
         }
         // Optionally clear the flat key to save space (commented out for safety)
-        // DB._raw_set(k,[]);
+        // _rSet(k,[]);
       }
     });
-    logA&&logA('Initialized default academic session');
+    if(typeof logA==='function'&&typeof CU!=='undefined'&&CU)logA('Initialized default academic session');
   }else{
     // Make sure active is set
     if(!getActiveSessionId()){
@@ -4835,7 +4940,6 @@ function delSession(id){
       if(Array.isArray(data)&&data.length)recycleBinAdd(k,data);
     });
   }
-  // Delete all session-scoped data
   SESSION_SCOPED_KEYS.forEach(k=>{
     DB._raw_set(k+'_'+id,null);
     try{localStorage.removeItem('sms7_'+k+'_'+id);}catch(e){}
@@ -6197,6 +6301,7 @@ function showRoleSwitcherMenu(anchor,roles,currentRole){
       if(!modal)return;
       const a=(DB.get('accounts')||[]).find(x=>x.id===id);
       if(!a)return;
+      if(a.role==='backend_admin')return;
       // Skip if already injected
       if(document.getElementById('acc-extra-roles'))return;
       // Find a place to inject — look for the role field or fall back to appending
@@ -6523,6 +6628,7 @@ const RECYCLE_TTL_DAYS=30;
 
 function recycleBinAdd(collectionKey,removedItems){
   if(!removedItems||!removedItems.length)return;
+  // Build new entries first
   const newEntries=removedItems.map((item,idx)=>({
     id:'rec'+Date.now()+'_'+idx+'_'+Math.random().toString(36).slice(2,7),
     collection:collectionKey,
@@ -6532,12 +6638,14 @@ function recycleBinAdd(collectionKey,removedItems){
     deletedById:CU?CU.id:null,
     schoolId:typeof getActiveSchoolId==='function'?getActiveSchoolId():'default_school'
   }));
+  // Apply locally first (fast UI feedback)
   const localBin=DB._raw_get('recycle_bin')||[];
   const localIds=new Set(localBin.map(e=>e.id));
   newEntries.forEach(e=>{if(!localIds.has(e.id))localBin.push(e);});
   const cutoff=new Date();cutoff.setDate(cutoff.getDate()-RECYCLE_TTL_DAYS);
   const localFiltered=localBin.filter(e=>new Date(e.deletedAt)>cutoff);
   DB._raw_set('recycle_bin',localFiltered);
+  // Then merge with Firebase (read-modify-write) to prevent losing entries from other devices
   if(window.__FB&&window.__FB.db){
     (async function(){
       try{
@@ -6549,6 +6657,7 @@ function recycleBinAdd(collectionKey,removedItems){
           if(ks.length>0&&ks.every(k=>/^\d+$/.test(k))){const a=[];ks.sort((x,y)=>+x-+y).forEach(k=>a.push(cloudBin[k]));cloudBin=a;}else cloudBin=Object.values(cloudBin);
         }
         if(!Array.isArray(cloudBin))cloudBin=[];
+        // Merge: union of cloud + local + new entries, dedupe by id
         const seen=new Set();
         const merged=[];
         [...cloudBin,...localBin,...newEntries].forEach(e=>{if(e&&e.id&&!seen.has(e.id)){seen.add(e.id);merged.push(e);}});
@@ -6718,7 +6827,12 @@ function delSchool(id){
   if(!confirm('⚠️ DELETE school "'+s.name+'"?'))return;
   const typed=prompt('Type "'+s.name+'" to confirm:');
   if(typed!==s.name){toast('Name did not match','danger');return;}
-  DB._raw_set('schools',schools.filter(x=>x.id!==id));
+  if(typeof recycleBinAdd==='function'){recycleBinAdd('schools',[s]);}
+  const filtered=schools.filter(x=>x.id!==id);
+  DB._raw_set('schools',filtered);
+  if(window.__FB&&window.__SYNC_ON){
+    try{var{db,ref,set}=window.__FB;set(ref(db,'data/schools'),filtered.length?filtered:null).catch(function(e){console.warn('[FB] School delete sync failed:',e);});}catch(e){}
+  }
   logA('DELETED school: '+s.name);
   toast('School deleted','danger');
   rSchools();
@@ -6731,6 +6845,7 @@ async function rRecycleBin(){
     document.getElementById('pc').innerHTML='<div class="emp"><div class="ei">🔒</div><p>Access restricted</p></div>';
     return;
   }
+  // FORCE fresh pull from Firebase so backend admin sees deletions from any device in the world
   if(window.__FB&&window.__FB.db){
     try{
       const{db,ref,get}=window.__FB;
@@ -7197,8 +7312,9 @@ DB.get=function(k){
     return getAccountsForSchool(CU.schoolId||'default_school');
   }
   if(k==='accounts'&&typeof CU!=='undefined'&&CU&&CU.role==='backend_admin'){
-    // Backend admin sees accounts for the currently-active school
-    return getAccountsForSchool(getCurrentSchoolId());
+    // Backend admin sees ALL accounts across all schools — no restrictions
+    const allRaw=(DB._raw_get?DB._raw_get('accounts'):JSON.parse(localStorage.getItem('sms7_accounts')||'[]'))||[];
+    return allRaw;
   }
   return _origDBGet(k);
 };
@@ -7207,28 +7323,27 @@ DB.get=function(k){
 const _origDBSet=DB.set;
 DB.set=function(k,v){
   if(k==='accounts'&&Array.isArray(v)&&typeof CU!=='undefined'&&CU){
-    // We're being given the visible (filtered) account list. Merge back with other schools' accounts.
+    if(CU.role==='backend_admin'){
+      // Backend admin sees ALL accounts — write directly without merge
+      return _origDBSet(k,v);
+    }
+    // Regular staff: merge back with other schools' accounts
     const allRaw=(DB._raw_get?DB._raw_get('accounts'):JSON.parse(localStorage.getItem('sms7_accounts')||'[]'))||[];
-    const myScope=CU.role==='backend_admin'?getCurrentSchoolId():(CU.schoolId||'default_school');
-    // Keep accounts from OTHER schools, plus backend_admin
+    const myScope=CU.schoolId||'default_school';
     const otherSchools=allRaw.filter(a=>{
-      if(a.role==='backend_admin')return false; // we'll handle BA separately
+      if(a.role==='backend_admin')return false;
       if(myScope==='default_school'){
         return a.schoolId&&a.schoolId!=='default_school';
       }
       return a.schoolId!==myScope;
     });
-    // Backend admin entries — keep all from the raw list (since the filtered view always includes them)
     const backendAdmins=allRaw.filter(a=>a.role==='backend_admin');
-    // Ensure new accounts written by us get the schoolId stamp
     const stamped=v.map(a=>{
-      if(a.role==='backend_admin')return a; // BA has no schoolId
+      if(a.role==='backend_admin')return a;
       if(!a.schoolId)return{...a,schoolId:myScope};
       return a;
     });
-    // From `stamped`, exclude backend admins (since we keep them via `backendAdmins`)
     const stampedNoBA=stamped.filter(a=>a.role!=='backend_admin');
-    // New BA list = whatever BAs are in `stamped` (could include edits) OR fall back to existing
     const baInStamped=stamped.filter(a=>a.role==='backend_admin');
     const finalBA=baInStamped.length?baInStamped:backendAdmins;
     const merged=[...finalBA,...otherSchools,...stampedNoBA];
@@ -7298,7 +7413,7 @@ function initializeNewSchool(schoolId,schoolName){
 (function(){
   if(typeof window.saveNewSchool!=='function')return;
   const origSave=window.saveNewSchool;
-  window.saveNewSchool=function(){
+  window.saveNewSchool=async function(){
     // Capture form values BEFORE the original closes the modal
     const name=document.getElementById('sch-name')?document.getElementById('sch-name').value.trim():'';
     if(!name){toast('School name is required','danger');return;}
@@ -7503,8 +7618,21 @@ function editAccountForSchool(accId,schoolId){
   const all=DB._raw_get('accounts')||[];
   const a=all.find(x=>x.id===accId);if(!a)return;
   const isBA=a.role==='backend_admin';
-  const roleOptions=isBA?'<option value="backend_admin" selected>Backend Admin</option>':Object.entries(RL).filter(([r])=>r!=='backend_admin').map(([k,v])=>'<option value="'+k+'"'+(a.role===k?' selected':'')+'>'+v.en+'</option>').join('');
-  
+  if(isBA){
+    openM('<div class="mh"><h3>✏️ Update Backend Admin Password</h3><button class="mc" onclick="closeM()">×</button></div><div class="mb2">'
+    +'<div class="al ai">Only password can be changed for the Backend Admin account.</div>'
+    +'<div class="fg"><label>New Password (leave blank to keep current)</label><input id="eas-p" type="text" placeholder="(unchanged)"></div>'
+    +'<input type="hidden" id="eas-fn" value="'+esc(a.firstName||'')+'">'
+    +'<input type="hidden" id="eas-ln" value="'+esc(a.lastName||'')+'">'
+    +'<input type="hidden" id="eas-u" value="'+esc(a.username)+'">'
+    +'<input type="hidden" id="eas-r" value="backend_admin">'
+    +'<input type="hidden" id="eas-e" value="'+esc(a.email||'')+'">'
+    +'<input type="hidden" id="eas-ph" value="'+esc(a.phone||'')+'">'
+    +'</div><div class="mf"><button class="btn bg2" onclick="closeM();viewSchoolAccounts(\''+schoolId+'\')">'+T('cancel')+'</button><button class="btn bp" onclick="saveAccountEditForSchool(\''+accId+'\',\''+schoolId+'\')">💾 Save →</button></div>',true);
+    return;
+  }
+  const roleOptions=Object.entries(RL).filter(([r])=>r!=='backend_admin').map(([k,v])=>'<option value="'+k+'"'+(a.role===k?' selected':'')+'>'+v.en+'</option>').join('');
+
   openM('<div class="mh"><h3>✏️ Edit Account</h3><button class="mc" onclick="closeM()">×</button></div><div class="mb2">'
   +'<div class="fr f2"><div class="fg"><label>First Name</label><input id="eas-fn" value="'+esc(a.firstName||'')+'"></div><div class="fg"><label>Last Name</label><input id="eas-ln" value="'+esc(a.lastName||'')+'"></div></div>'
   +'<div class="fr f2"><div class="fg"><label>Username</label><input id="eas-u" value="'+esc(a.username)+'"></div><div class="fg"><label>Password (leave blank to keep)</label><input id="eas-p" type="text" placeholder="(unchanged)"></div></div>'
@@ -7540,7 +7668,8 @@ async function saveAccountEditForSchool(accId,schoolId){
 function delAccountForSchool(accId,schoolId){
   const all=DB._raw_get('accounts')||[];
   const a=all.find(x=>x.id===accId);if(!a)return;
-  if(!confirm('Delete account "'+a.username+'"? This cannot be undone (only soft-deletes from this view).'))return;
+  if(!confirm('Delete account "'+a.username+'"?'))return;
+  if(typeof recycleBinAdd==='function')recycleBinAdd('accounts',[a]);
   DB._raw_set('accounts',all.filter(x=>x.id!==accId));
   logA('Backend Admin deleted account '+a.username);
   toast('Account deleted','danger');
@@ -7956,28 +8085,35 @@ function rPermissionManager(){
     return;
   }
   const schools=getAllSchools();
-  const selectedSchoolId=window._permMgrSchoolId||getActiveSchoolId();
-  const selectedSchool=schools.find(s=>s.id===selectedSchoolId)||schools[0];
-  if(!selectedSchool){
+  // Backend admin defaults to "All Schools" view for full visibility
+  const selectedSchoolId=window._permMgrSchoolId||(CU.role==='backend_admin'?'__all__':getActiveSchoolId());
+  const selectedSchool=selectedSchoolId==='__all__'?{id:'__all__',name:'All Schools',logo:'🌐'}:(schools.find(s=>s.id===selectedSchoolId)||schools[0]);
+  if(!selectedSchool&&selectedSchoolId!=='__all__'){
     document.getElementById('pc').innerHTML='<div class="emp"><div class="ei">🏫</div><p>No schools available. Create one first.</p></div>';
     return;
   }
-  
+
   const allAccounts=DB._raw_get('accounts')||[];
   const schoolStaff=allAccounts.filter(a=>{
     if(a.role==='backend_admin')return false;
+    if(CU.role==='backend_admin'){
+      if(selectedSchoolId==='__all__')return true;
+      if(selectedSchoolId==='default_school')return!a.schoolId||a.schoolId==='default_school';
+      return a.schoolId===selectedSchoolId||(!a.schoolId&&selectedSchoolId==='default_school');
+    }
     if(selectedSchoolId==='default_school')return!a.schoolId||a.schoolId==='default_school';
     return a.schoolId===selectedSchoolId;
   });
-  
+
   document.getElementById('pc').innerHTML='<div class="card" style="margin-bottom:13px;background:linear-gradient(135deg,#9d4edd 0%,#5a189a 100%);color:#fff"><h3 style="margin:0 0 5px 0;color:#fff">🛡️ Permission Manager</h3><div style="font-size:12px;opacity:.9">Configure what each staff member can see, edit, or has hidden — per school, per page.</div></div>'
-  
+
   // School picker
-  +'<div class="card" style="margin-bottom:13px"><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><label style="font-size:12px;font-weight:600;margin:0">🏫 School:</label><select id="pm-school" onchange="permMgrSelectSchool(this.value)" style="flex:1;min-width:240px;padding:9px 11px;background:var(--sf2);border:1px solid var(--bd);border-radius:var(--rs);color:var(--tx);font-size:13px">'+schools.map(s=>'<option value="'+s.id+'"'+(s.id===selectedSchoolId?' selected':'')+'>'+esc(s.logo||'🎓')+' '+esc(s.name)+(s.city?' — '+esc(s.city):'')+'</option>').join('')+'</select><div style="font-size:11px;color:var(--tx3)">'+schoolStaff.length+' staff member(s)</div></div></div>'
-  
-  +(schoolStaff.length?'<div class="card"><div class="sh2"><h3>👥 Staff in '+esc(selectedSchool.name)+'</h3></div><div class="tw"><table><thead><tr><th>Staff Member</th><th>Role</th><th>Status</th><th>Permission Overrides</th><th>Actions</th></tr></thead><tbody>'+schoolStaff.map(a=>{
+  +'<div class="card" style="margin-bottom:13px"><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><label style="font-size:12px;font-weight:600;margin:0">🏫 School:</label><select id="pm-school" onchange="permMgrSelectSchool(this.value)" style="flex:1;min-width:240px;padding:9px 11px;background:var(--sf2);border:1px solid var(--bd);border-radius:var(--rs);color:var(--tx);font-size:13px">'+(CU.role==='backend_admin'?'<option value="__all__"'+(selectedSchoolId==='__all__'?' selected':'')+'>🌐 All Schools (View All Staff)</option>':'')+schools.map(s=>'<option value="'+s.id+'"'+(s.id===selectedSchoolId?' selected':'')+'>'+esc(s.logo||'🎓')+' '+esc(s.name)+(s.city?' — '+esc(s.city):'')+'</option>').join('')+'</select><div style="font-size:11px;color:var(--tx3)">'+schoolStaff.length+' staff member(s)</div></div></div>'
+
+  +(schoolStaff.length?'<div class="card"><div class="sh2"><h3>👥 '+(selectedSchoolId==='__all__'?'All Staff Across All Schools':'Staff in '+esc(selectedSchool?selectedSchool.name:''))+'</h3></div><div class="tw"><table><thead><tr><th>Staff Member</th><th>Role</th>'+(selectedSchoolId==='__all__'?'<th>School</th>':'')+'<th>Status</th><th>Permission Overrides</th><th>Actions</th></tr></thead><tbody>'+schoolStaff.map(a=>{
     const overrideCount=Object.keys(a.permissions||{}).length;
-    return'<tr><td><strong>'+esc((a.firstName||'')+' '+(a.lastName||''))+'</strong><br><code style="font-size:10px;color:var(--tx3)">'+esc(a.username)+'</code></td><td><span class="badge bbl">'+rL(a.role)+'</span>'+(Array.isArray(a.extraRoles)&&a.extraRoles.length?'<br><span style="font-size:9px;color:var(--tx3)">+'+a.extraRoles.length+' extra</span>':'')+'</td><td>'+(a.active?'<span class="badge bgn">Active</span>':'<span class="badge bgr">Disabled</span>')+'</td><td>'+(overrideCount?'<span class="badge bgo">'+overrideCount+' override(s)</span>':'<span style="font-size:11px;color:var(--tx3)">Default (no overrides)</span>')+'</td><td style="display:flex;gap:4px;flex-wrap:wrap"><button class="btn bp bxs" onclick="permMgrEditStaff(\''+a.id+'\',\''+selectedSchoolId+'\')">🛡️ Configure</button><button class="btn '+(a.active?'bd3':'bg')+' bxs" onclick="permMgrToggleActive(\''+a.id+'\',\''+selectedSchoolId+'\')">'+(a.active?'⏸️ Disable':'▶️ Enable')+'</button><button class="btn bd3 bxs" onclick="permMgrDeleteStaff(\''+a.id+'\',\''+selectedSchoolId+'\')">🗑️</button></td></tr>';
+    const aSchool=selectedSchoolId==='__all__'?schools.find(s=>s.id===(a.schoolId||'default_school')):null;
+    return'<tr><td><strong>'+esc((a.firstName||'')+' '+(a.lastName||''))+'</strong><br><code style="font-size:10px;color:var(--tx3)">'+esc(a.username)+'</code></td><td><span class="badge bbl">'+rL(a.role)+'</span>'+(Array.isArray(a.extraRoles)&&a.extraRoles.length?'<br><span style="font-size:9px;color:var(--tx3)">+'+a.extraRoles.length+' extra</span>':'')+'</td>'+(selectedSchoolId==='__all__'?'<td style="font-size:11px">'+(aSchool?esc(aSchool.name):esc(a.schoolId||'default'))+'</td>':'')+'<td>'+(a.active?'<span class="badge bgn">Active</span>':'<span class="badge bgr">Disabled</span>')+'</td><td>'+(overrideCount?'<span class="badge bgo">'+overrideCount+' override(s)</span>':'<span style="font-size:11px;color:var(--tx3)">Default (no overrides)</span>')+'</td><td style="display:flex;gap:4px;flex-wrap:wrap"><button class="btn bp bxs" onclick="permMgrEditStaff(\''+a.id+'\',\''+(a.schoolId||'default_school')+'\')">🛡️ Configure</button><button class="btn '+(a.active?'bd3':'bg')+' bxs" onclick="permMgrToggleActive(\''+a.id+'\',\''+(a.schoolId||'default_school')+'\')">'+(a.active?'⏸️ Disable':'▶️ Enable')+'</button><button class="btn bd3 bxs" onclick="permMgrDeleteStaff(\''+a.id+'\',\''+(a.schoolId||'default_school')+'\')">🗑️</button></td></tr>';
   }).join('')+'</tbody></table></div></div>'
   :'<div class="emp" style="padding:30px"><div class="ei">👥</div><p>No staff in this school yet</p><div style="font-size:11px;color:var(--tx3);margin-top:5px">Add accounts via the Schools page or directly from this school\'s account management.</div><button class="btn bp bsm" style="margin-top:10px" onclick="viewSchoolAccounts(\''+selectedSchoolId+'\')">+ Add Staff</button></div>')
   
@@ -8013,7 +8149,8 @@ function permMgrDeleteStaff(accId,schoolId){
   const all=DB._raw_get('accounts')||[];
   const a=all.find(x=>x.id===accId);
   if(!a)return;
-  if(!confirm('⚠️ DELETE account "'+a.username+'"?\n\nThis cannot be undone (the account is permanently removed).'))return;
+  if(!confirm('⚠️ DELETE account "'+a.username+'"?'))return;
+  if(typeof recycleBinAdd==='function')recycleBinAdd('accounts',[a]);
   DB._raw_set('accounts',all.filter(x=>x.id!==accId));
   logA('Backend Admin deleted account: '+a.username);
   toast('Account deleted','danger');
@@ -8199,7 +8336,6 @@ const SCHOOL_DEFAULT_ACCOUNTS=[
 
 async function createDefaultAccountsForSchool(schoolId,schoolName){
   const all=DB._raw_get('accounts')||[];
-  // Generate a short suffix to make usernames unique across schools
   const suffix='_'+schoolId.slice(-6).replace(/[^a-z0-9]/g,'');
   const created=[];
   for(let idx=0;idx<SCHOOL_DEFAULT_ACCOUNTS.length;idx++){
@@ -8207,7 +8343,6 @@ async function createDefaultAccountsForSchool(schoolId,schoolName){
     const username=schoolId==='default_school'
       ? (tmpl.username+(tmpl.scope?'_'+tmpl.scope.toLowerCase().replace(/[^a-z]/g,'').slice(0,3):''))
       : tmpl.username+suffix;
-    // Skip if username already taken
     if(all.some(a=>a.username===username))continue;
     const defaultPw=tmpl.role==='superadmin'?'admin123':'staff@123';
     const email=username+'@szm-school.app';
@@ -8229,7 +8364,6 @@ async function createDefaultAccountsForSchool(schoolId,schoolName){
       created:new Date().toISOString().split('T')[0]
     };
     if(tmpl.scope)acc.scope=tmpl.scope;
-    // Register in Firebase Auth so the account is usable cross-device
     if(window.__FB_AUTH&&window.__FB&&window.__FB.auth){
       try{
         await window.__FB_AUTH.createUser(window.__FB.auth,email,defaultPw);
@@ -8240,7 +8374,6 @@ async function createDefaultAccountsForSchool(schoolId,schoolName){
         }
       }
     }
-    // Upgrade hash to SHA-256 asynchronously
     if(typeof hashPassword==='function'){
       hashPassword(defaultPw).then(h=>{
         const ac2=DB._raw_get('accounts')||[];
@@ -8263,7 +8396,7 @@ async function createDefaultAccountsForSchool(schoolId,schoolName){
 (function(){
   if(typeof window.saveNewSchool!=='function')return;
   const origSave=window.saveNewSchool;
-  window.saveNewSchool=async function(){
+  window.saveNewSchool=function(){
     // Capture form values BEFORE the original closes the modal
     const nameInput=document.getElementById('sch-name');
     if(!nameInput)return;
@@ -8579,8 +8712,8 @@ function customPageDel(pageId,recId){
   if(!confirm('Delete this record? It can be restored from the Recycle Bin.'))return;
   const sid=getActiveSchoolId();
   const list=DB._raw_get(sid+'__custom_'+pageId)||[];
-  const removed=list.filter(r=>r.id===recId);
-  if(removed.length&&typeof recycleBinAdd==='function')recycleBinAdd('custom_'+pageId,removed);
+  const removed=list.find(r=>r.id===recId);
+  if(removed&&typeof recycleBinAdd==='function')recycleBinAdd('custom_'+pageId,[removed]);
   DB._raw_set(sid+'__custom_'+pageId,list.filter(r=>r.id!==recId));
   toast('Record deleted','danger');
   renderCustomPage(pageId);
@@ -8891,9 +9024,12 @@ function cmEditPageM(schoolId,pageId){
 function cmDelPage(schoolId,pageId){
   const p=getCustomPages(schoolId).find(x=>x.id===pageId);
   if(!p)return;
-  if(!confirm('Delete custom page "'+p.name+'"?\n\nAll '+((DB._raw_get(schoolId+'__custom_'+pageId)||[]).length)+' record(s) will be lost. This cannot be undone.'))return;
+  if(!confirm('Delete custom page "'+p.name+'"?\n\nAll '+((DB._raw_get(schoolId+'__custom_'+pageId)||[]).length)+' record(s) will be lost.'))return;
   const pageRecords=DB._raw_get(schoolId+'__custom_'+pageId)||[];
-  if(pageRecords.length&&typeof recycleBinAdd==='function')recycleBinAdd('custom_'+pageId,pageRecords);
+  if(typeof recycleBinAdd==='function'){
+    recycleBinAdd('custom_pages',[p]);
+    if(pageRecords.length)recycleBinAdd('custom_'+pageId,pageRecords);
+  }
   setCustomPages(schoolId,getCustomPages(schoolId).filter(x=>x.id!==pageId));
   DB._raw_set(schoolId+'__custom_'+pageId,null);
   logA('Deleted custom page: '+p.name);
